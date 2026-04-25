@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "the extension",
+  "version": "0.1.0",
+  "description": "AI-powered Chrome extension builder with live browser context",
+  "permissions": ["sidePanel", "activeTab", "scripting", "storage", "tabs", "debugger"],
+  "host_permissions": ["<all_urls>"],
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "background": {
+    "service_worker": "src/background.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/content.ts"],
+      "css": ["src/content/content.css"]
+    }
+  ],
+  "action": {
+    "default_title": "the extension",
+    "default_icon": {
+      "16": "public/icons/icon16.png",
+      "48": "public/icons/icon48.png",
+      "128": "public/icons/icon128.png"
+    }
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "MacCtrl+Shift+E"
+      },
+      "description": "Toggle sidepanel"
+    },
+    "send_message": {
+      "suggested_key": {
+        "default": "Ctrl+Enter",
+        "mac": "Command+Enter"
+      },
+      "description": "Send message"
+    },
+    "quick_actions": {
+      "suggested_key": {
+        "default": "Ctrl+K",
+        "mac": "Command+K"
+      },
+      "description": "Quick action menu"
+    }
+  },
+  "icons": {
+    "16": "public/icons/icon16.png",
+    "48": "public/icons/icon48.png",
+    "128": "public/icons/icon128.png"
+  }
+}

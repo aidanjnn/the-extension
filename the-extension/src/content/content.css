@@ -1,0 +1,29 @@
+.te-highlight-overlay {
+  position: fixed;
+  pointer-events: none;
+  z-index: 2147483647;
+  border: 2px solid #6366f1;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 2px;
+  transition: all 0.1s ease;
+}
+
+.te-highlight-label {
+  position: fixed;
+  z-index: 2147483647;
+  background: #6366f1;
+  color: white;
+  font-family: monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.te-select-mode-active {
+  cursor: crosshair !important;
+}
