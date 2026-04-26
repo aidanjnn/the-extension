@@ -1,0 +1,5 @@
+{
+  "buildCommand": "npm install && npx vite build --config vite.landing.config.ts",
+  "outputDirectory": "dist-landing",
+  "framework": null
+}
