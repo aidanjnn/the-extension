@@ -1,7 +1,0 @@
-a[href*="shorts" i],
-[aria-label*="shorts" i],
-[data-testid*="shorts" i],
-[class*="shorts" i],
-[data-browser-forge-hidden="true"] {
-  display: none !important;
-}
