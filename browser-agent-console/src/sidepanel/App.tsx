@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import {
   MESSAGE_TYPES,
   type ClickedElementStored,
+  type DomEditOperation,
 } from '../shared/messages'
 import './App.css'
 
@@ -108,7 +109,7 @@ type TabMatch = {
 type MessagePart =
   | { type: 'text'; content: string }
   | { type: 'tool'; name: string; label: string; status: 'running' | 'done'; favIconUrl?: string }
-  | { type: 'extension_ready'; path: string }
+  | { type: 'extension_ready'; path: string; projectId?: string }
 
 type DisplayPart =
   | { type: 'text'; content: string }
@@ -125,6 +126,15 @@ interface Message {
 }
 
 type SidebarView = 'projects' | 'conversations'
+type AppMode = 'create' | 'dom'
+
+type DomExportResult = {
+  project_id: string
+  extension_path: string
+  zip_path: string
+  download_url: string
+  load_instructions: string
+}
 
 const TOOL_LABELS: Record<string, string> = {
   list_dir: 'List directory',
@@ -599,6 +609,10 @@ export default function App() {
 
   // Provider state
   const [provider, setProvider] = useState<'gemini' | 'openai' | 'nvidia'>('gemini')
+  const [appMode, setAppMode] = useState<AppMode>('create')
+  const [domEdits, setDomEdits] = useState<DomEditOperation[]>([])
+  const [domExportResult, setDomExportResult] = useState<DomExportResult | null>(null)
+  const [domExporting, setDomExporting] = useState(false)
 
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -854,6 +868,40 @@ export default function App() {
   }
 
   const getFaviconUrl = (host: string) => `https://www.google.com/s2/favicons?domain=${host}&sz=16`
+
+  const selectedDomItems = useMemo(
+    () =>
+      [...clickedElements]
+        .filter((item) => item.tag !== 'tab')
+        .sort((a, b) => (a.selectionOrder ?? a.timestamp) - (b.selectionOrder ?? b.timestamp)),
+    [clickedElements],
+  )
+
+  const applyAppMode = async (next: AppMode) => {
+    setAppMode(next)
+    setError('')
+    setInputChipPreview(null)
+    setOpenChipKey(null)
+    closeMention()
+    if (editorRef.current) {
+      editorRef.current.textContent = ''
+    }
+    setQuery('')
+    setMessages([])
+    setActiveConversationId(null)
+    if (next === 'dom') {
+      setDomExportResult(null)
+    }
+    try {
+      await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPES.setDomEditMode,
+        enabled: next === 'dom',
+      })
+      await refreshClickedElements(next === 'dom')
+    } catch {
+      // Ignore pages that cannot receive content-script messages.
+    }
+  }
 
   const waitForSocketOpen = (ws: WebSocket, timeoutMs = 5000) =>
     new Promise<boolean>((resolve) => {
@@ -1775,6 +1823,7 @@ export default function App() {
     if (items.length === 0) return
     await chrome.runtime.sendMessage({
       type: MESSAGE_TYPES.removeClickedBulk,
+      domMode: appMode === 'dom',
       items: items.map((item) => ({
         selector: item.selector,
         url: item.url,
@@ -1784,9 +1833,10 @@ export default function App() {
   }
 
 
-  const refreshClickedElements = async () => {
+  const refreshClickedElements = async (domMode = appMode === 'dom') => {
     const response = await chrome.runtime.sendMessage({
       type: MESSAGE_TYPES.getAllClicked,
+      domMode,
     })
     const elements = Array.isArray(response?.elements) ? (response.elements as ClickedElementStored[]) : []
     setClickedElements(elements)
@@ -1794,7 +1844,7 @@ export default function App() {
 
   useEffect(() => {
     const initContext = async () => {
-      await refreshClickedElements()
+      await refreshClickedElements(appMode === 'dom')
     }
 
     void initContext()
@@ -1821,7 +1871,14 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibility)
       chrome.runtime.onMessage.removeListener(handleRuntimeMessage)
     }
-  }, [])
+  }, [appMode])
+
+  useEffect(() => {
+    void chrome.runtime.sendMessage({
+      type: MESSAGE_TYPES.setDomEditMode,
+      enabled: appMode === 'dom',
+    }).catch(() => {})
+  }, [appMode])
 
   useEffect(() => {
     const nextIds = new Set(clickedElements.map(buildChipId))
@@ -2200,13 +2257,218 @@ export default function App() {
     editorRef.current?.focus()
   }
 
+  const ordinalInstructionFor = (raw: string, index: number) => {
+    const ordinals = ['first', 'second', 'third', 'fourth', 'fifth']
+    const lower = raw.toLowerCase()
+    const current = ordinals[index]
+    if (!current || !lower.includes(current)) return raw
+    const start = lower.indexOf(current)
+    let end = raw.length
+    for (const next of ordinals.slice(index + 1)) {
+      const pos = lower.indexOf(next, start + current.length)
+      if (pos !== -1) {
+        end = Math.min(end, pos)
+      }
+    }
+    return raw.slice(start, end).replace(new RegExp(`^${current}\\b[:,\\s-]*`, 'i'), '').trim() || raw
+  }
+
+  const stylesForDomInstruction = (instruction: string): { kind: DomEditOperation['kind']; styles?: Record<string, string>; text?: string; description: string } => {
+    const lower = instruction.toLowerCase()
+    const styles: Record<string, string> = {}
+    let kind: DomEditOperation['kind'] = 'style'
+    let description = 'Restyled selected element'
+
+    if (/\b(remove|delete|hide|erase)\b/.test(lower)) {
+      return { kind: 'hide', styles: { display: 'none' }, description: 'Hidden selected element' }
+    }
+
+    const quotedText = instruction.match(/["“](.+?)["”]/)?.[1] || instruction.match(/'(.+?)'/)?.[1]
+    if (/\b(replace text|change text|rename|set text)\b/.test(lower) && quotedText) {
+      return { kind: 'text', text: quotedText, description: `Changed text to "${quotedText}"` }
+    }
+
+    if (/\b(wider|wide|expand horizontally|stretch)\b/.test(lower)) {
+      kind = 'resize'
+      styles.transform = 'scaleX(1.12)'
+      styles['transform-origin'] = 'center'
+      description = 'Made selected element wider'
+    }
+    if (/\b(narrower|skinnier|less wide)\b/.test(lower)) {
+      kind = 'resize'
+      styles.transform = 'scaleX(0.9)'
+      styles['transform-origin'] = 'center'
+      description = 'Made selected element narrower'
+    }
+    if (/\b(bigger|larger|enlarge|scale up|increase size)\b/.test(lower)) {
+      kind = 'resize'
+      styles.transform = 'scale(1.08)'
+      styles['transform-origin'] = 'center'
+      description = 'Enlarged selected element'
+    }
+    if (/\b(smaller|shrink|scale down|decrease size)\b/.test(lower)) {
+      kind = 'resize'
+      styles.transform = 'scale(0.92)'
+      styles['transform-origin'] = 'center'
+      description = 'Shrank selected element'
+    }
+    if (/\b(taller|more height)\b/.test(lower)) {
+      kind = 'resize'
+      styles['min-height'] = 'calc(100% + 24px)'
+      description = 'Made selected element taller'
+    }
+    if (/\b(shorter|less height)\b/.test(lower)) {
+      kind = 'resize'
+      styles['max-height'] = '72%'
+      styles.overflow = 'hidden'
+      description = 'Made selected element shorter'
+    }
+    if (/\b(round|rounded|curve|curved)\b/.test(lower)) {
+      styles['border-radius'] = '18px'
+      styles.overflow = 'hidden'
+      description = 'Rounded selected element corners'
+    }
+    if (/\b(orange)\b/.test(lower)) {
+      styles.outline = '3px solid #f59e0b'
+      styles['outline-offset'] = '4px'
+      styles['box-shadow'] = '0 0 0 6px rgba(245, 158, 11, 0.18)'
+      description = 'Added orange emphasis'
+    } else if (/\b(highlight|outline|border)\b/.test(lower)) {
+      styles.outline = '3px solid #a78bfa'
+      styles['outline-offset'] = '4px'
+      styles['box-shadow'] = '0 0 0 6px rgba(167, 139, 250, 0.18)'
+      description = 'Highlighted selected element'
+    }
+    if (/\b(dim|fade|deemphasize|less visible)\b/.test(lower)) {
+      kind = 'emphasize'
+      styles.opacity = '0.45'
+      styles.filter = 'grayscale(0.7)'
+      description = 'Dimmed selected element'
+    }
+    if (/\b(blur)\b/.test(lower)) {
+      kind = 'emphasize'
+      styles.filter = 'blur(2px)'
+      description = 'Blurred selected element'
+    }
+    if (/\b(up|higher)\b/.test(lower)) {
+      kind = 'move'
+      styles.transform = 'translateY(-12px)'
+      description = 'Moved selected element up'
+    }
+    if (/\b(down|lower)\b/.test(lower)) {
+      kind = 'move'
+      styles.transform = 'translateY(12px)'
+      description = 'Moved selected element down'
+    }
+    if (/\b(left)\b/.test(lower)) {
+      kind = 'move'
+      styles.transform = 'translateX(-12px)'
+      description = 'Moved selected element left'
+    }
+    if (/\b(right)\b/.test(lower)) {
+      kind = 'move'
+      styles.transform = 'translateX(12px)'
+      description = 'Moved selected element right'
+    }
+    if (/\bbackground\b/.test(lower)) {
+      styles.background = lower.includes('orange') ? 'rgba(245, 158, 11, 0.18)' : 'rgba(167, 139, 250, 0.16)'
+      description = 'Changed selected element background'
+    }
+    if (/\btext\b/.test(lower) && /\b(white|bright)\b/.test(lower)) {
+      styles.color = '#ffffff'
+      description = 'Changed selected element text color'
+    }
+
+    if (Object.keys(styles).length === 0) {
+      styles.outline = '3px solid #a78bfa'
+      styles['outline-offset'] = '4px'
+      description = 'Highlighted selected element'
+    }
+
+    return { kind, styles, description }
+  }
+
+  const buildDomOperations = (requestText: string, items: ClickedElementStored[]) =>
+    items.map((item, index) => {
+      const scopedInstruction = ordinalInstructionFor(requestText, index)
+      const parsed = stylesForDomInstruction(scopedInstruction)
+      return {
+        id: `dom-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: parsed.kind,
+        selector: item.selector,
+        url: item.url,
+        tabId: item.tabId,
+        label: formatElementShortLabel(item),
+        order: domEdits.length + index + 1,
+        createdAt: Date.now(),
+        styles: parsed.styles,
+        text: parsed.text,
+        description: parsed.description,
+      } satisfies DomEditOperation
+    })
+
+  const handleDomSubmit = async (rawMessage: string, displayText: string, displayParts: DisplayPart[]) => {
+    const chipItems = displayParts
+      .filter((part): part is { type: 'chip'; items: ClickedElementStored[] } => part.type === 'chip')
+      .flatMap((part) => part.items)
+      .filter((item) => item.tag !== 'tab')
+    const unique = new Map<string, ClickedElementStored>()
+    ;(chipItems.length > 0 ? chipItems : selectedDomItems).forEach((item) => unique.set(buildChipId(item), item))
+    const orderedItems = Array.from(unique.values()).sort(
+      (a, b) => (a.selectionOrder ?? a.timestamp) - (b.selectionOrder ?? b.timestamp),
+    )
+
+    if (orderedItems.length === 0) {
+      setError('Select one or more page elements with Cmd + click first.')
+      return
+    }
+
+    const operations = buildDomOperations(rawMessage, orderedItems)
+    setQuery('')
+    if (editorRef.current) {
+      editorRef.current.textContent = ''
+    }
+    setInputChipPreview(null)
+    setError('')
+
+    const now = new Date().toISOString()
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'user',
+        content: displayText || rawMessage,
+        created_at: now,
+        displayParts: displayParts.length > 0 ? displayParts : undefined,
+      },
+      {
+        role: 'assistant',
+        content: `Applied ${operations.length} DOM edit${operations.length === 1 ? '' : 's'} live. You can keep editing or export these changes as an extension.`,
+        created_at: new Date().toISOString(),
+      },
+    ])
+
+    for (const operation of operations) {
+      await chrome.runtime.sendMessage({
+        type: MESSAGE_TYPES.applyDomEdit,
+        operation,
+      })
+    }
+    setDomEdits((prev) => [...prev, ...operations])
+    setDomExportResult(null)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const ws = wsRef.current
     const displayParts = serializeEditorForDisplayParts()
     const displayText = displayPartsToText(displayParts).trim()
     const rawMessage = (await serializeEditorWithHtml()).trim()
-    if (!rawMessage || loading || !activeProject) return
+    if (!rawMessage || loading) return
+    if (appMode === 'dom') {
+      await handleDomSubmit(rawMessage, displayText, displayParts)
+      return
+    }
+    const ws = wsRef.current
+    if (!activeProject) return
     if (!ws) {
       setError('Not connected to server yet')
       return
@@ -2626,6 +2888,60 @@ export default function App() {
     setSidebarView('projects')
   }
 
+  const targetUrlPatternsForDomEdits = () => {
+    const origins = new Set<string>()
+    domEdits.forEach((edit) => {
+      try {
+        origins.add(new URL(edit.url).origin)
+      } catch {
+        // ignore invalid urls
+      }
+    })
+    selectedDomItems.forEach((item) => {
+      try {
+        origins.add(new URL(item.url).origin)
+      } catch {
+        // ignore invalid urls
+      }
+    })
+    return Array.from(origins).map((origin) => `${origin}/*`)
+  }
+
+  const handleExportDomEdits = async () => {
+    if (domEdits.length === 0 || domExporting) return
+    setDomExporting(true)
+    setError('')
+    try {
+      const res = await fetch(`${API_URL}/api/dom-edits/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: activeProject?.name ? `${activeProject.name} DOM edits` : 'Browser Forge DOM edits',
+          target_urls: targetUrlPatternsForDomEdits(),
+          operations: domEdits,
+        }),
+      })
+      if (!res.ok) {
+        throw new Error(await res.text())
+      }
+      const data = (await res.json()) as DomExportResult
+      setDomExportResult(data)
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `DOM edit extension exported. Download: ${data.download_url}`,
+          created_at: new Date().toISOString(),
+          parts: [{ type: 'extension_ready', path: data.extension_path, projectId: data.project_id }],
+        },
+      ])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to export DOM edits')
+    } finally {
+      setDomExporting(false)
+    }
+  }
+
   return (
     <div className="app">
       {/* Sidebar overlay */}
@@ -2758,18 +3074,40 @@ export default function App() {
               <path d="m17 3 4 4-9.5 9.5L7 17l.5-4.5L17 3z" />
             </svg>
           </button>
-          <h1>{activeProject ? activeProject.name : 'Browser Forge'}</h1>
+          <h1>{appMode === 'dom' ? 'Edit DOM' : activeProject ? activeProject.name : 'Browser Forge'}</h1>
           <div className="header-actions">
-            <select
-              className="provider-select"
-              value={provider}
-              onChange={(e) => setProvider(e.target.value as 'gemini' | 'openai' | 'nvidia')}
-              title="LLM provider"
-            >
-              <option value="gemini">Gemini</option>
-              <option value="openai">OpenAI</option>
-              <option value="nvidia">NVIDIA</option>
-            </select>
+            <div className="app-mode-toggle" role="tablist" aria-label="Browser Forge mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={appMode === 'create'}
+                className={`app-mode-option ${appMode === 'create' ? 'active' : ''}`}
+                onClick={() => void applyAppMode('create')}
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={appMode === 'dom'}
+                className={`app-mode-option ${appMode === 'dom' ? 'active' : ''}`}
+                onClick={() => void applyAppMode('dom')}
+              >
+                Edit DOM
+              </button>
+            </div>
+            {appMode === 'create' && (
+              <select
+                className="provider-select"
+                value={provider}
+                onChange={(e) => setProvider(e.target.value as 'gemini' | 'openai' | 'nvidia')}
+                title="LLM provider"
+              >
+                <option value="gemini">Gemini</option>
+                <option value="openai">OpenAI</option>
+                <option value="nvidia">NVIDIA</option>
+              </select>
+            )}
             {activeProject && (
               <>
                 <button
@@ -2888,9 +3226,74 @@ export default function App() {
           </div>
         )}
 
+        {appMode === 'dom' && (
+          <div className="dom-mode-panel">
+            <div className="dom-mode-copy">
+              <span className="dom-mode-kicker">DOM edit mode</span>
+              <span>Hold ⌘ and click page containers to select them. Then ask for safe edits like remove, wider, rounded, orange outline, dim, or move right.</span>
+            </div>
+            <div className="dom-mode-meta">
+              <span>{selectedDomItems.length} selected</span>
+              <span>{domEdits.length} edit{domEdits.length === 1 ? '' : 's'}</span>
+            </div>
+            {domEdits.length > 0 && (
+              <>
+                <div className="dom-edit-history">
+                  {domEdits.slice(-4).map((edit) => (
+                    <span key={edit.id} className="dom-edit-pill">
+                      #{edit.order} {edit.label || edit.selector}: {edit.description}
+                    </span>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="dom-export-btn"
+                  onClick={handleExportDomEdits}
+                  disabled={domExporting}
+                >
+                  {domExporting ? 'Exporting…' : 'Export edits as extension'}
+                </button>
+              </>
+            )}
+            {domExportResult && (
+              <a className="dom-download-link" href={domExportResult.download_url} target="_blank" rel="noreferrer">
+                Download exported extension
+              </a>
+            )}
+          </div>
+        )}
+
         {/* Messages */}
         <div className="messages-container">
-          {!activeProject && (
+          {appMode === 'dom' && messages.length === 0 && !loading && (
+            <div className="empty-canvas">
+              <div className="preview-card preview-card-floating dom-preview-card">
+                <div className="preview-card-pill">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 6h18M3 12h18M3 18h18" />
+                  </svg>
+                  <span>DOM Edit</span>
+                </div>
+                <div className="preview-card-quote">
+                  "Make the selected stories row wider and rounded."
+                </div>
+              </div>
+              <div className="empty-canvas-title">Edit the live page directly</div>
+              <div className="empty-canvas-hint">Hold ⌘ and click a highlighted container, then describe the adjustment.</div>
+              <div className="action-chips">
+                <button type="button" className="action-chip" onClick={() => applyQuickPrompt('Remove the selected element')}>
+                  Remove
+                </button>
+                <button type="button" className="action-chip" onClick={() => applyQuickPrompt('Make the selected element wider')}>
+                  Wider
+                </button>
+                <button type="button" className="action-chip" onClick={() => applyQuickPrompt('Add an orange outline and round the corners')}>
+                  Highlight
+                </button>
+              </div>
+            </div>
+          )}
+          {appMode === 'create' && !activeProject && (
             <div className="empty-canvas">
               <div className="preview-card preview-card-floating">
                 <div className="preview-card-pill">
@@ -2907,7 +3310,7 @@ export default function App() {
               <div className="empty-canvas-hint">Open a project from the menu, then describe a change.</div>
             </div>
           )}
-          {activeProject && messages.length === 0 && !loading && (
+          {appMode === 'create' && activeProject && messages.length === 0 && !loading && (
             <div className="empty-canvas">
               <div className="preview-card preview-card-floating">
                 <div className="preview-card-pill">
@@ -2982,7 +3385,7 @@ export default function App() {
                     )}
                     {nonToolParts.map((part, j) =>
                       part.type === 'extension_ready' ? (
-                        <ExtensionInstallCard key={j} path={part.path} projectId={activeProject?.id} />
+                        <ExtensionInstallCard key={j} path={part.path} projectId={part.projectId ?? activeProject?.id} />
                       ) : (
                         <div key={j} className="message-content bf-part-in">
                           <ReactMarkdown>{part.content}</ReactMarkdown>
@@ -3160,8 +3563,14 @@ export default function App() {
               <div
                 ref={editorRef}
                 className="chat-input-editor"
-                contentEditable={Boolean(activeProject) && !loading}
-                data-placeholder={activeProject ? 'Ask a question about this page...' : 'Select a project first...'}
+                contentEditable={(appMode === 'dom' || Boolean(activeProject)) && !loading}
+                data-placeholder={
+                  appMode === 'dom'
+                    ? 'Select elements with ⌘ + click, then ask for an edit...'
+                    : activeProject
+                      ? 'Ask a question about this page...'
+                      : 'Select a project first...'
+                }
                 onInput={handleEditorInput}
                 onClick={handleEditorClick}
                 onKeyDown={handleEditorKeyDown}
@@ -3246,7 +3655,7 @@ export default function App() {
               <button
                 type="submit"
                 className="send-circle"
-                disabled={loading || !query.trim() || !activeProject || htmlSummaryCount > 0}
+                disabled={loading || !query.trim() || (appMode === 'create' && !activeProject) || htmlSummaryCount > 0}
                 title="Send message"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

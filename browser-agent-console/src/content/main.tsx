@@ -167,12 +167,16 @@ const pruneLargeHtml = (root: Element) => {
 // Listen for sidepanel lifecycle messages to toggle the highlighter
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === MESSAGE_TYPES.sidepanelOpen) {
-    setHoverHighlighterEnabled(true)
     return
   }
 
   if (message?.type === MESSAGE_TYPES.sidepanelClose) {
     setHoverHighlighterEnabled(false)
+    return
+  }
+
+  if (message?.type === MESSAGE_TYPES.setDomEditMode) {
+    setHoverHighlighterEnabled(Boolean(message?.enabled))
     return
   }
 

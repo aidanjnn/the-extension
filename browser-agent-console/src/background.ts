@@ -1,14 +1,17 @@
 // Background owns the single source of truth for clicked elements and sidepanel state.
 import {
   CLICKED_ELEMENTS_KEY,
+  DOM_EDIT_ELEMENTS_KEY,
   MESSAGE_TYPES,
   type ClickedElementPayload,
   type ClickedElementStored,
+  type DomEditOperation,
   type MessageType,
 } from './shared/messages'
 
 type StorageState = {
   [CLICKED_ELEMENTS_KEY]?: ClickedElementStored[]
+  [DOM_EDIT_ELEMENTS_KEY]?: ClickedElementStored[]
 }
 
 type SidePanelState = {
@@ -31,6 +34,11 @@ type ConsoleLogFilters = {
 
 function getStoredList(stored: StorageState): ClickedElementStored[] {
   const existing = stored[CLICKED_ELEMENTS_KEY]
+  return Array.isArray(existing) ? existing : []
+}
+
+function getStoredDomList(stored: StorageState): ClickedElementStored[] {
+  const existing = stored[DOM_EDIT_ELEMENTS_KEY]
   return Array.isArray(existing) ? existing : []
 }
 
@@ -93,6 +101,13 @@ function sendClearHighlightsDom(tabId: number) {
   }).catch(() => {})
 }
 
+function sendDomEditMode(tabId: number, enabled: boolean) {
+  chrome.tabs.sendMessage(tabId, {
+    type: MESSAGE_TYPES.setDomEditMode,
+    enabled,
+  }).catch(() => {})
+}
+
 async function broadcastClearHighlightsDom() {
   const tabs = await chrome.tabs.query({})
   await Promise.allSettled(
@@ -101,6 +116,47 @@ async function broadcastClearHighlightsDom() {
       .map((tab) =>
         chrome.tabs.sendMessage(tab.id as number, {
           type: MESSAGE_TYPES.clearHighlightsDom,
+        }),
+      ),
+  )
+}
+
+async function broadcastDomEditMode(enabled: boolean) {
+  const tabs = await chrome.tabs.query({})
+  await Promise.allSettled(
+    tabs
+      .filter((tab) => typeof tab.id === 'number')
+      .map((tab) =>
+        chrome.tabs.sendMessage(tab.id as number, {
+          type: MESSAGE_TYPES.setDomEditMode,
+          enabled,
+        }),
+      ),
+  )
+}
+
+async function broadcastDomEdit(operation: DomEditOperation) {
+  const tabs = await chrome.tabs.query({})
+  await Promise.allSettled(
+    tabs
+      .filter((tab) => typeof tab.id === 'number')
+      .map((tab) =>
+        chrome.tabs.sendMessage(tab.id as number, {
+          type: MESSAGE_TYPES.applyDomEdit,
+          operation,
+        }),
+      ),
+  )
+}
+
+async function broadcastClearDomEdits() {
+  const tabs = await chrome.tabs.query({})
+  await Promise.allSettled(
+    tabs
+      .filter((tab) => typeof tab.id === 'number')
+      .map((tab) =>
+        chrome.tabs.sendMessage(tab.id as number, {
+          type: MESSAGE_TYPES.clearDomEdits,
         }),
       ),
   )
@@ -131,6 +187,7 @@ async function broadcastClickedElementsUpdated(elements: ClickedElementStored[])
 
 const sidepanelStateByTab = new Map<number, boolean>()
 let isSidepanelOpen = false
+let isDomEditMode = false
 const INITIAL_RELOAD_KEY = 'browserForgeSidepanelInitialReloadDone'
 
 const consoleLogsByTab = new Map<number, ConsoleLogEntry[]>()
@@ -175,6 +232,15 @@ async function writeClickedElements(next: ClickedElementStored[]) {
   await chrome.storage.local.set({ [CLICKED_ELEMENTS_KEY]: dedupeBySelector(next) })
 }
 
+async function readDomEditElements(): Promise<ClickedElementStored[]> {
+  const stored: StorageState = await chrome.storage.local.get(DOM_EDIT_ELEMENTS_KEY)
+  return dedupeBySelector(getStoredDomList(stored))
+}
+
+async function writeDomEditElements(next: ClickedElementStored[]) {
+  await chrome.storage.local.set({ [DOM_EDIT_ELEMENTS_KEY]: dedupeBySelector(next) })
+}
+
 function removeMatching(
   list: ClickedElementStored[],
   tabId: number,
@@ -194,10 +260,15 @@ function removeMatching(
 // Update storage list and broadcast to all listeners.
 async function updateClickedElements(
   updater: (current: ClickedElementStored[]) => ClickedElementStored[],
+  options: { domMode?: boolean } = {},
 ) {
-  const list = await readClickedElements()
+  const list = options.domMode ? await readDomEditElements() : await readClickedElements()
   const next = dedupeBySelector(updater(list))
-  await writeClickedElements(next)
+  if (options.domMode) {
+    await writeDomEditElements(next)
+  } else {
+    await writeClickedElements(next)
+  }
   await broadcastClickedElementsUpdated(next)
   return next
 }
@@ -269,7 +340,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false
     }
 
-    readClickedElements().then((list) => {
+    const domMode = Boolean(message?.domMode)
+    ;(domMode ? readDomEditElements() : readClickedElements()).then((list) => {
       const elements = list.filter((item) => item?.tabId === tabId && item?.url === message?.url)
       sendResponse({ elements })
     })
@@ -277,7 +349,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (type === MESSAGE_TYPES.getAllClicked) {
-    readClickedElements().then((elements) => {
+    const domMode = Boolean(message?.domMode)
+    ;(domMode ? readDomEditElements() : readClickedElements()).then((elements) => {
       sendResponse({ elements })
     })
     return true
@@ -338,7 +411,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     updateClickedElements((list) => [
       ...removeMatching(list, tabId, payload?.selector, payload?.url),
       { ...payload, tabId },
-    ]).then(() => {
+    ], { domMode: isDomEditMode }).then(() => {
       if (typeof payload?.selector === 'string') {
         sendHighlightSelector(tabId, payload.selector)
       }
@@ -355,7 +428,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const selector = message.selector
     const url = message.url
-    updateClickedElements((list) => removeMatching(list, tabId, selector, url)).then(() => {
+    updateClickedElements((list) => removeMatching(list, tabId, selector, url), { domMode: isDomEditMode }).then(() => {
       if (typeof selector === 'string') {
         sendUnhighlightSelector(tabId, selector)
       }
@@ -372,16 +445,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false
     }
 
-    updateClickedElements((list) =>
-      list.filter(
-        (item) =>
-          !items.some(
-            (removeItem: { selector?: string; url?: string; tabId?: number }) =>
-              item?.tabId === removeItem?.tabId &&
-              item?.selector === removeItem?.selector &&
-              item?.url === removeItem?.url,
-          ),
-      ),
+    updateClickedElements(
+      (list) =>
+        list.filter(
+          (item) =>
+            !items.some(
+              (removeItem: { selector?: string; url?: string; tabId?: number }) =>
+                item?.tabId === removeItem?.tabId &&
+                item?.selector === removeItem?.selector &&
+                item?.url === removeItem?.url,
+            ),
+        ),
+      { domMode: Boolean(message?.domMode) || isDomEditMode },
     ).then(() => {
       items.forEach((removeItem: { selector?: string; tabId?: number }) => {
         if (typeof removeItem?.selector === 'string' && typeof removeItem?.tabId === 'number') {
@@ -417,7 +492,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       return [...removeMatching(list, tabId, payload.selector, payload.url), { ...payload, tabId }]
-    }).then((next) => {
+    }, { domMode: isDomEditMode }).then((next) => {
       const exists = next.some(
         (item) => item?.tabId === tabId && item?.selector === selector && item?.url === url,
       )
@@ -440,7 +515,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const url = message.url
-    updateClickedElements((list) => removeMatching(list, tabId, undefined, url)).then(() => {
+    updateClickedElements((list) => removeMatching(list, tabId, undefined, url), { domMode: isDomEditMode }).then(() => {
       sendClearHighlightsDom(tabId)
       respondOk(sendResponse)
     })
@@ -448,10 +523,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (type === MESSAGE_TYPES.clearAllClicked) {
-    updateClickedElements(() => []).then(() => {
+    updateClickedElements(() => [], { domMode: isDomEditMode }).then(() => {
       void broadcastClearHighlightsDom()
       respondOk(sendResponse)
     })
+    return true
+  }
+
+  if (type === MESSAGE_TYPES.setDomEditMode) {
+    isDomEditMode = Boolean(message?.enabled)
+    void broadcastDomEditMode(isDomEditMode).then(() => respondOk(sendResponse))
+    return true
+  }
+
+  if (type === MESSAGE_TYPES.getDomEditMode) {
+    sendResponse({ enabled: isDomEditMode })
+    return false
+  }
+
+  if (type === MESSAGE_TYPES.applyDomEdit) {
+    const operation = message?.operation as DomEditOperation | undefined
+    if (!operation || typeof operation.selector !== 'string') {
+      respondOk(sendResponse)
+      return false
+    }
+    if (typeof operation.tabId === 'number') {
+      chrome.tabs.sendMessage(operation.tabId, {
+        type: MESSAGE_TYPES.applyDomEdit,
+        operation,
+      }).catch(() => {})
+    } else {
+      void broadcastDomEdit(operation)
+    }
+    respondOk(sendResponse)
+    return false
+  }
+
+  if (type === MESSAGE_TYPES.clearDomEdits) {
+    void broadcastClearDomEdits().then(() => respondOk(sendResponse))
     return true
   }
 
@@ -505,9 +614,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   await sendSidepanelState(tabId, isSidepanelOpen)
+  sendDomEditMode(tabId, isDomEditMode)
 })
 
 chrome.tabs.onCreated.addListener(async (tab) => {
   if (typeof tab.id !== 'number') return
   await sendSidepanelState(tab.id, isSidepanelOpen)
+  sendDomEditMode(tab.id, isDomEditMode)
 })

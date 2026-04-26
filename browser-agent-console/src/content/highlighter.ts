@@ -31,11 +31,12 @@ import {
   MESSAGE_TYPES,
   type ClickedElementPayload,
   type ClickedElementStored,
+  type DomEditOperation,
 } from '../shared/messages'
 
 
 let state: HighlighterState = {
-  enabled: true,
+  enabled: false,
   moveCount: 0,
   lastElement: null,
 }
@@ -51,6 +52,9 @@ let clickLabelEl: HTMLDivElement | null = null
 let isMetaKeyDown = false
 let isSidepanelOpen = false
 let sidepanelStateKnown = false
+let selectionOrder = 0
+
+const originalDomState = new Map<string, { cssText: string; text: string }>()
 
 /**
  * Injects the overlay/label and clicked-highlight styles once per page.
@@ -66,8 +70,12 @@ function ensureStyle() {
       position: fixed;
       z-index: 2147483647 !important;
       border: 2px solid #a78bfa !important;
-      box-shadow: 0 0 0 1px #a78bfa, 0 0 0 2px rgba(167, 139, 250, 0.35) !important;
-      background: transparent;
+      border-radius: 12px !important;
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.18),
+        0 0 0 5px rgba(167, 139, 250, 0.20),
+        0 14px 45px rgba(0, 0, 0, 0.28) !important;
+      background: rgba(167, 139, 250, 0.06);
       box-sizing: border-box;
       pointer-events: none !important;
       display: none;
@@ -77,11 +85,12 @@ function ensureStyle() {
     #${LABEL_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      background: #a78bfa !important;
-      color: #111 !important;
-      font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      border-radius: 4px !important;
-      padding: 2px 6px !important;
+      background: linear-gradient(135deg, #c4b5fd, #a78bfa) !important;
+      color: #0d0d0e !important;
+      font: 11px/1.15 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      border-radius: 7px !important;
+      padding: 4px 8px !important;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.22) inset !important;
       pointer-events: none !important;
       display: none;
     }
@@ -90,8 +99,12 @@ function ensureStyle() {
       position: fixed;
       z-index: 2147483647 !important;
       border: 2px solid #a78bfa !important;
-      box-shadow: 0 0 0 1px #a78bfa, 0 0 0 2px rgba(167, 139, 250, 0.35) !important;
-      background: transparent;
+      border-radius: 12px !important;
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.18),
+        0 0 0 5px rgba(167, 139, 250, 0.24),
+        0 14px 45px rgba(0, 0, 0, 0.28) !important;
+      background: rgba(167, 139, 250, 0.08);
       box-sizing: border-box;
       pointer-events: none !important;
       display: none;
@@ -101,19 +114,21 @@ function ensureStyle() {
     #${CLICK_LABEL_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      background: #a78bfa !important;
-      color: #111 !important;
-      font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      border-radius: 4px !important;
-      padding: 2px 6px !important;
+      background: linear-gradient(135deg, #c4b5fd, #a78bfa) !important;
+      color: #0d0d0e !important;
+      font: 11px/1.15 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      border-radius: 7px !important;
+      padding: 4px 8px !important;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.22) inset !important;
       pointer-events: none !important;
       display: none;
     }
 
     .${CLICKED_CLASS} {
       outline: 2px solid #a78bfa !important;
-      outline-offset: 2px !important;
-      background-color: rgba(167, 139, 250, 0.12) !important;
+      outline-offset: 4px !important;
+      border-radius: 10px !important;
+      background-color: rgba(167, 139, 250, 0.10) !important;
       position: relative !important;
       z-index: 2147483646 !important;
     }
@@ -202,6 +217,27 @@ function getElementSelector(el: Element): string | null {
   return parts.length ? parts.join(' > ') : null
 }
 
+function getElementHtml(el: Element): string {
+  const clone = el.cloneNode(true) as Element
+  clone.classList.remove(CLICKED_CLASS)
+  clone.querySelectorAll(`.${CLICKED_CLASS}`).forEach((node) => node.classList.remove(CLICKED_CLASS))
+  return clone.outerHTML.slice(0, 5000)
+}
+
+function getVisibleText(el: Element): string {
+  return (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 500)
+}
+
+function getElementRect(el: Element) {
+  const rect = el.getBoundingClientRect()
+  return {
+    x: Math.round(rect.left),
+    y: Math.round(rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  }
+}
+
 /**
  * Persists the current hover state with a debounce.
  */
@@ -229,11 +265,16 @@ async function toggleClickedElement(el: Element) {
   const selector = getElementSelector(el)
   if (!selector) return
 
+  selectionOrder += 1
   const payload: ClickedElementPayload = {
     ...getElementInfo(el),
     selector,
     url: window.location.href,
     timestamp: Date.now(),
+    text: getVisibleText(el),
+    html: getElementHtml(el),
+    rect: getElementRect(el),
+    selectionOrder,
   }
 
   const response = await safeRuntimeMessage<{ action?: string }>({
@@ -252,6 +293,46 @@ async function toggleClickedElement(el: Element) {
   el.classList.add(CLICKED_CLASS)
   pinnedSelector = selector
   applyClickedOverlay(el)
+}
+
+function rememberOriginal(selector: string, el: HTMLElement) {
+  if (originalDomState.has(selector)) return
+  originalDomState.set(selector, {
+    cssText: el.style.cssText,
+    text: el.textContent || '',
+  })
+}
+
+function applyOperationToElement(operation: DomEditOperation, el: Element) {
+  if (!(el instanceof HTMLElement)) return
+  rememberOriginal(operation.selector, el)
+  if (operation.kind === 'hide') {
+    el.style.setProperty('display', 'none', 'important')
+  }
+  if (operation.kind === 'text' && typeof operation.text === 'string') {
+    el.textContent = operation.text
+  }
+  if (operation.styles) {
+    Object.entries(operation.styles).forEach(([property, value]) => {
+      el.style.setProperty(property, value, 'important')
+    })
+  }
+}
+
+function applyDomEdit(operation: DomEditOperation) {
+  if (!operation?.selector) return
+  document.querySelectorAll(operation.selector).forEach((el) => applyOperationToElement(operation, el))
+}
+
+function clearDomEdits() {
+  originalDomState.forEach((original, selector) => {
+    document.querySelectorAll(selector).forEach((el) => {
+      if (!(el instanceof HTMLElement)) return
+      el.style.cssText = original.cssText
+      el.textContent = original.text
+    })
+  })
+  originalDomState.clear()
 }
 
 /**
@@ -421,7 +502,7 @@ function setSidepanelState(open: boolean) {
   isSidepanelOpen = open
   sidepanelStateKnown = true
 
-  if (isSidepanelOpen) {
+  if (isSidepanelOpen && state.enabled) {
     void restoreClickedHighlights()
     return
   }
@@ -590,8 +671,31 @@ export async function startHoverHighlighter() {
     }
 
     if (message?.type === MESSAGE_TYPES.clickedElementsUpdated) {
-      if (!isSidepanelOpen) return
+      if (!isSidepanelOpen || !state.enabled) return
       void restoreClickedHighlights()
+      return
+    }
+
+    if (message?.type === MESSAGE_TYPES.setDomEditMode) {
+      setHoverHighlighterEnabled(Boolean(message?.enabled))
+      if (message?.enabled) {
+        void restoreClickedHighlights()
+      } else {
+        applyHighlight(null)
+        hideClickedHighlights()
+        hideClickedOverlay()
+      }
+      return
+    }
+
+    if (message?.type === MESSAGE_TYPES.applyDomEdit) {
+      applyDomEdit(message.operation as DomEditOperation)
+      return
+    }
+
+    if (message?.type === MESSAGE_TYPES.clearDomEdits) {
+      clearDomEdits()
+      return
     }
   })
 }
@@ -604,6 +708,8 @@ export function setHoverHighlighterEnabled(enabled: boolean) {
   state = { ...state, enabled }
   if (!enabled) {
     applyHighlight(null)
+    hideClickedHighlights()
+    hideClickedOverlay()
   }
   scheduleSave()
 }
