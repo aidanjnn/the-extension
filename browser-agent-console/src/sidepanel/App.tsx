@@ -40,7 +40,7 @@ type TabMatch = {
 type MessagePart =
   | { type: 'text'; content: string }
   | { type: 'tool'; name: string; label: string; status: 'running' | 'done'; favIconUrl?: string }
-  | { type: 'extension_ready'; path: string }
+  | { type: 'extension_ready'; path: string; projectId?: string }
 
 type DisplayPart =
   | { type: 'text'; content: string }
@@ -1834,7 +1834,7 @@ export default function App() {
 
       // Extension ready for install
       if (data.type === 'extension_ready') {
-        parts.push({ type: 'extension_ready', path: data.path })
+        parts.push({ type: 'extension_ready', path: data.path, projectId: data.project_id })
         ensureAssistantMessage()
         updateAssistantMessage()
         return
@@ -2237,7 +2237,7 @@ export default function App() {
                       <span className="tool-call-label">{part.label}</span>
                     </div>
                   ) : part.type === 'extension_ready' ? (
-                    <ExtensionInstallCard key={j} path={part.path} projectId={activeProject?.id} />
+                    <ExtensionInstallCard key={j} path={part.path} projectId={part.projectId ?? activeProject?.id} />
                   ) : (
                     <div key={j} className="message-content">
                       <ReactMarkdown>{part.content}</ReactMarkdown>

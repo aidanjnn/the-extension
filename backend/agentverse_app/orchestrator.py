@@ -63,6 +63,18 @@ def _download_url(project_id: str) -> str | None:
     return f"{base}/download/{project_id}.zip"
 
 
+def _fresh_build(build: ExtensionBuildRequest) -> ExtensionBuildRequest:
+    """Use a unique output project for each extension generation."""
+    return ExtensionBuildRequest(
+        job_id=build.job_id,
+        project_id=uuid4().hex,
+        query=build.query,
+        provider=build.provider,
+        source=build.source,
+        active_tabs=build.active_tabs,
+    )
+
+
 def _final_message(result: ExtensionBuildResult, spec: ExtensionSpec) -> str:
     name = spec.name or "Browser Forge Extension"
     targets = ", ".join(spec.target_urls) or "the active tab"
@@ -103,6 +115,7 @@ def _final_message(result: ExtensionBuildResult, spec: ExtensionSpec) -> str:
 
 
 async def run_orchestrator(build: ExtensionBuildRequest) -> ExtensionBuildResult:
+    build = _fresh_build(build)
     await backend_client.ensure_project(build.project_id)
 
     architect = await run_architect(ArchitectRequest(build=build))
@@ -141,6 +154,7 @@ async def run_orchestrator(build: ExtensionBuildRequest) -> ExtensionBuildResult
 async def stream_orchestrator_events(
     build: ExtensionBuildRequest,
 ) -> AsyncGenerator[dict, None]:
+    build = _fresh_build(build)
     await backend_client.ensure_project(build.project_id)
 
     yield {"type": "content", "content": "Agentverse Orchestrator: starting build.\n"}
@@ -177,7 +191,11 @@ async def stream_orchestrator_events(
     )
     yield {"type": "tool_end", "name": "Agentverse Packager"}
     yield {"type": "content", "content": f"{package.summary}\n"}
-    yield {"type": "extension_ready", "path": package.extension_path}
+    yield {
+        "type": "extension_ready",
+        "path": package.extension_path,
+        "project_id": build.project_id,
+    }
 
     result = ExtensionBuildResult(
         job_id=build.job_id,

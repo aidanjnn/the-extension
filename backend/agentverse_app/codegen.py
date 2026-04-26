@@ -23,6 +23,10 @@ output a complete Chrome extension as JSON with exactly three files: manifest.js
 content.js, and content.css. content.js and content.css must both contain meaningful \
 implementation code; never leave either one empty.
 
+You may also receive retrieved implementation context. Treat it as DOM guidance, \
+safety constraints, and selector starting points. Adapt it to the exact user \
+request, target URLs, and page evidence.
+
 Critical rules:
 1. Use SITE-SPECIFIC selectors, not generic ones. Research the site's actual DOM \
    structure (e.g., for YouTube use `ytd-rich-section-renderer`, \
@@ -123,6 +127,7 @@ async def _generate_with_llm(
     target_urls: list[str],
     extension_name: str,
     provider: str,
+    rag_snippets: list[str],
     quality_feedback: list[str] | None = None,
 ) -> dict[str, str] | None:
     """Call the LLM to produce manifest/content.js/content.css. Returns None on failure."""
@@ -131,11 +136,13 @@ async def _generate_with_llm(
         provider
     )["secondary_model"]
 
+    retrieved_context = "\n".join(f"- {snippet}" for snippet in rag_snippets)
     user_prompt = (
         f"User request: {_strip_chip_html(query)}\n\n"
         f"Target URLs (use these as manifest content_scripts.matches): "
         f"{json.dumps(target_urls)}\n"
         f"Extension display name: {extension_name}\n\n"
+        f"Retrieved implementation context:\n{retrieved_context}\n\n"
         + (
             "The previous output failed these checks. Fix every issue:\n"
             + "\n".join(f"- {issue}" for issue in quality_feedback)
@@ -290,6 +297,7 @@ async def _generate_checked(
     target_urls: list[str],
     extension_name: str,
     provider: str,
+    rag_snippets: list[str],
 ) -> dict[str, str] | None:
     feedback: list[str] | None = None
     for attempt in range(3):
@@ -298,6 +306,7 @@ async def _generate_checked(
             target_urls=target_urls,
             extension_name=extension_name,
             provider=provider,
+            rag_snippets=rag_snippets,
             quality_feedback=feedback,
         )
         if files is None:
@@ -321,6 +330,7 @@ async def run_codegen(request: CodegenRequest) -> CodegenResult:
         target_urls=spec.target_urls,
         extension_name=spec.name,
         provider=request.build.provider,
+        rag_snippets=request.rag.snippets,
     )
 
     if files is None:
