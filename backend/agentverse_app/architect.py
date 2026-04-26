@@ -37,10 +37,73 @@ def _infer_target_urls(query: str, active_tabs: list[dict]) -> list[str]:
     return ["<all_urls>"]
 
 
+_ACTION_WORDS = {
+    "hide", "remove", "block", "clean", "highlight", "summarize", "translate",
+    "filter", "minimize", "expand", "darken", "lighten", "show", "skip", "mute",
+    "save", "download", "auto", "redirect",
+}
+_SITE_WORDS = {
+    "instagram", "youtube", "twitter", "x", "gmail", "linkedin", "amazon",
+    "facebook", "reddit", "tiktok", "github", "spotify", "netflix", "twitch",
+    "medium", "substack", "notion",
+}
+_TARGET_WORDS = {
+    "reels", "shorts", "ads", "messages", "notifications", "sidebar", "stories",
+    "comments", "feed", "suggestions", "prices", "videos", "posts", "thumbnails",
+    "recommendations", "trending", "explore", "promoted", "sponsored", "popups",
+}
+_BRAND_CASE = {
+    "youtube": "YouTube",
+    "tiktok": "TikTok",
+    "linkedin": "LinkedIn",
+    "github": "GitHub",
+    "x": "X",
+    "instagram": "Instagram",
+    "twitter": "Twitter",
+    "gmail": "Gmail",
+    "facebook": "Facebook",
+    "amazon": "Amazon",
+    "reddit": "Reddit",
+    "spotify": "Spotify",
+    "netflix": "Netflix",
+    "twitch": "Twitch",
+    "medium": "Medium",
+    "substack": "Substack",
+    "notion": "Notion",
+}
+_STOP_WORDS = {
+    "chrome", "extension", "browser", "website", "site", "page", "app",
+    "build", "make", "create", "generate", "write", "develop", "code",
+    "a", "an", "the", "that", "which", "who", "what", "this", "these",
+    "to", "for", "from", "on", "in", "at", "with", "by", "of", "into",
+    "me", "my", "please", "can", "you", "will", "would", "could", "should",
+    "i", "want", "need", "like", "have", "get", "let", "do", "does",
+    "and", "or", "but", "so", "is", "are", "be", "been", "being",
+}
+
+
+def _cap(word: str) -> str:
+    return _BRAND_CASE.get(word, word.title())
+
+
 def _extension_name(query: str) -> str:
-    words = re.sub(r"[^a-zA-Z0-9 ]+", " ", query).strip().split()
-    title = " ".join(words[:5]).title()
-    return title or "Browser Forge Extension"
+    words = re.findall(r"[a-zA-Z]+", query.lower())
+    if not words:
+        return "Browser Forge Extension"
+
+    action = next((w for w in words if w in _ACTION_WORDS), None)
+    site = next((w for w in words if w in _SITE_WORDS), None)
+    target = next((w for w in words if w in _TARGET_WORDS), None)
+
+    parts = [p for p in (action, site, target) if p]
+    if len(parts) >= 2:
+        return " ".join(_cap(p) for p in parts)
+
+    meaningful = [w for w in words if w not in _STOP_WORDS and len(w) > 1]
+    if not meaningful:
+        return "Browser Forge Extension"
+
+    return " ".join(_cap(w) for w in meaningful[:4])
 
 
 async def run_architect(request: ArchitectRequest) -> ArchitectResult:

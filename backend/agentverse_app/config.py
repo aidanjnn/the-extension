@@ -20,6 +20,7 @@ class AgentverseSettings:
     agentverse_api_key: str = _env("AGENTVERSE_API_KEY")
     asi_one_api_key: str = _env("ASI_ONE_API_KEY")
     public_agent_base_url: str = _env("PUBLIC_AGENT_BASE_URL")
+    public_backend_base_url: str = _env("PUBLIC_BACKEND_BASE_URL")
     backend_execution_api_url: str = _env(
         "BACKEND_EXECUTION_API_URL",
         "http://localhost:8000",
