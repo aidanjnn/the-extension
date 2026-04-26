@@ -69,13 +69,13 @@ function ensureStyle() {
     #${OVERLAY_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      border: 2px solid #a78bfa !important;
+      border: 2px solid #7aa7ff !important;
       border-radius: 12px !important;
       box-shadow:
         0 0 0 1px rgba(255, 255, 255, 0.18),
-        0 0 0 5px rgba(167, 139, 250, 0.20),
+        0 0 0 5px rgba(122, 167, 255, 0.22),
         0 14px 45px rgba(0, 0, 0, 0.28) !important;
-      background: rgba(167, 139, 250, 0.06);
+      background: rgba(122, 167, 255, 0.07);
       box-sizing: border-box;
       pointer-events: none !important;
       display: none;
@@ -85,7 +85,7 @@ function ensureStyle() {
     #${LABEL_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      background: linear-gradient(135deg, #c4b5fd, #a78bfa) !important;
+      background: linear-gradient(135deg, #a9c6ff, #7aa7ff) !important;
       color: #0d0d0e !important;
       font: 11px/1.15 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       border-radius: 7px !important;
@@ -98,13 +98,13 @@ function ensureStyle() {
     #${CLICK_OVERLAY_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      border: 2px solid #a78bfa !important;
+      border: 2px solid #7aa7ff !important;
       border-radius: 12px !important;
       box-shadow:
         0 0 0 1px rgba(255, 255, 255, 0.18),
-        0 0 0 5px rgba(167, 139, 250, 0.24),
+        0 0 0 5px rgba(122, 167, 255, 0.26),
         0 14px 45px rgba(0, 0, 0, 0.28) !important;
-      background: rgba(167, 139, 250, 0.08);
+      background: rgba(122, 167, 255, 0.09);
       box-sizing: border-box;
       pointer-events: none !important;
       display: none;
@@ -114,7 +114,7 @@ function ensureStyle() {
     #${CLICK_LABEL_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      background: linear-gradient(135deg, #c4b5fd, #a78bfa) !important;
+      background: linear-gradient(135deg, #a9c6ff, #7aa7ff) !important;
       color: #0d0d0e !important;
       font: 11px/1.15 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       border-radius: 7px !important;
@@ -125,10 +125,10 @@ function ensureStyle() {
     }
 
     .${CLICKED_CLASS} {
-      outline: 2px solid #a78bfa !important;
+      outline: 2px solid #7aa7ff !important;
       outline-offset: 4px !important;
       border-radius: 10px !important;
-      background-color: rgba(167, 139, 250, 0.10) !important;
+      background-color: rgba(122, 167, 255, 0.10) !important;
       position: relative !important;
       z-index: 2147483646 !important;
     }

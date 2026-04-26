@@ -515,7 +515,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const url = message.url
-    updateClickedElements((list) => removeMatching(list, tabId, undefined, url), { domMode: isDomEditMode }).then(() => {
+    updateClickedElements(
+      (list) => removeMatching(list, tabId, undefined, url),
+      { domMode: Boolean(message?.domMode) || isDomEditMode },
+    ).then(() => {
       sendClearHighlightsDom(tabId)
       respondOk(sendResponse)
     })
@@ -523,7 +526,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (type === MESSAGE_TYPES.clearAllClicked) {
-    updateClickedElements(() => [], { domMode: isDomEditMode }).then(() => {
+    updateClickedElements(() => [], { domMode: Boolean(message?.domMode) || isDomEditMode }).then(() => {
       void broadcastClearHighlightsDom()
       respondOk(sendResponse)
     })

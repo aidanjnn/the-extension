@@ -609,6 +609,7 @@ export default function App() {
   const [domExportResult, setDomExportResult] = useState<DomExportResult | null>(null)
   const [domExporting, setDomExporting] = useState(false)
   const didEnsureDefaultProjectRef = useRef(false)
+  const activeDomPageKeyRef = useRef<string | null>(null)
 
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -640,7 +641,13 @@ export default function App() {
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
 
   // Active tab context for the page-context chip above the input
-  const [activeTabContext, setActiveTabContext] = useState<{ title: string; host: string; favIconUrl?: string } | null>(null)
+  const [activeTabContext, setActiveTabContext] = useState<{
+    id: number
+    title: string
+    host: string
+    url: string
+    favIconUrl?: string
+  } | null>(null)
 
   // Panel display mode (Dia-style toggle): sidebar (default), floating overlay (iframe injected
   // into the active page — no browser chrome), or tab
@@ -777,8 +784,10 @@ export default function App() {
           return
         }
         setActiveTabContext({
+          id: tab.id as number,
           title: tab.title || host,
           host,
+          url: tab.url,
           favIconUrl: tab.favIconUrl,
         })
       } catch {
@@ -876,9 +885,14 @@ export default function App() {
   const selectedDomItems = useMemo(
     () =>
       [...clickedElements]
-        .filter((item) => item.tag !== 'tab')
+        .filter(
+          (item) =>
+            item.tag !== 'tab' &&
+            (!activeTabContext ||
+              (item.tabId === activeTabContext.id && item.url === activeTabContext.url)),
+        )
         .sort((a, b) => (a.selectionOrder ?? a.timestamp) - (b.selectionOrder ?? b.timestamp)),
-    [clickedElements],
+    [activeTabContext, clickedElements],
   )
 
   const applyAppMode = async (next: AppMode) => {
@@ -1843,6 +1857,12 @@ export default function App() {
       domMode,
     })
     const elements = Array.isArray(response?.elements) ? (response.elements as ClickedElementStored[]) : []
+    if (domMode && activeTabContext) {
+      setClickedElements(
+        elements.filter((item) => item.tabId === activeTabContext.id && item.url === activeTabContext.url),
+      )
+      return
+    }
     setClickedElements(elements)
   }
 
@@ -1883,6 +1903,37 @@ export default function App() {
       enabled: appMode === 'dom',
     }).catch(() => {})
   }, [appMode])
+
+  useEffect(() => {
+    document.body.classList.toggle('bf-dom-mode', appMode === 'dom')
+    return () => document.body.classList.remove('bf-dom-mode')
+  }, [appMode])
+
+  useEffect(() => {
+    if (appMode !== 'dom' || !activeTabContext) return
+    const nextKey = `${activeTabContext.id}:${activeTabContext.url}`
+    if (activeDomPageKeyRef.current === null) {
+      activeDomPageKeyRef.current = nextKey
+      return
+    }
+    if (activeDomPageKeyRef.current === nextKey) return
+    activeDomPageKeyRef.current = nextKey
+    setClickedElements([])
+    setDomEdits([])
+    setDomExportResult(null)
+    if (editorRef.current) {
+      editorRef.current.textContent = ''
+    }
+    setQuery('')
+    setMessages([])
+    setInputChipPreview(null)
+    setOpenChipKey(null)
+    knownChipIdsRef.current = new Set()
+    void chrome.runtime.sendMessage({
+      type: MESSAGE_TYPES.clearAllClicked,
+      domMode: true,
+    }).catch(() => {})
+  }, [activeTabContext, appMode])
 
   useEffect(() => {
     const nextIds = new Set(clickedElements.map(buildChipId))
