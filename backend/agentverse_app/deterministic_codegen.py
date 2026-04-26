@@ -689,6 +689,547 @@ def _x_trending(query: str, target_urls: list[str], name: str) -> dict[str, str]
     return _files(name, target_urls, "Hide X/Twitter trending sidebar sections.", js)
 
 
+def _x_engagement_bait(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  if (!/\\/status\\/\\d+/.test(location.pathname)) return;
+
+  const primaryColumn = document.querySelector('[data-testid="primaryColumn"]') || document;
+  const articles = Array.from(primaryColumn.querySelectorAll('article[data-testid="tweet"], article'));
+  const replies = articles.slice(1);
+  replies.forEach((article) => {
+    if (!(article instanceof Element)) return;
+    if (!hasVerifiedBadge(article)) return;
+    const likeCount = getLikeCount(article);
+    if (likeCount >= 100) return;
+    const cell = article.closest('[data-testid="cellInnerDiv"]') || article;
+    cell.setAttribute('data-bf-engagement-bait-removed', '1');
+    cell.remove();
+  });
+""",
+        """
+function compactNumberToInt(raw, suffix) {
+  const value = Number(String(raw || '').replace(/,/g, ''));
+  if (!Number.isFinite(value)) return 0;
+  const unit = String(suffix || '').toLowerCase();
+  if (unit === 'k') return Math.round(value * 1000);
+  if (unit === 'm') return Math.round(value * 1000000);
+  return Math.round(value);
+}
+
+function extractLikeCountFromText(text) {
+  const normalized = String(text || '').replace(/\\s+/g, ' ');
+  const labeled = normalized.match(/([\\d,.]+)\\s*([km])?\\s+likes?\\b/i);
+  if (labeled) return compactNumberToInt(labeled[1], labeled[2]);
+  const aria = normalized.match(/likes?\\s*[,·]?\\s*([\\d,.]+)\\s*([km])?/i);
+  if (aria) return compactNumberToInt(aria[1], aria[2]);
+  return 0;
+}
+
+function getLikeCount(article) {
+  const groups = article.querySelectorAll('[role="group"], [aria-label*="like" i], [data-testid="like"]');
+  let best = 0;
+  groups.forEach((node) => {
+    const text = `${node.getAttribute?.('aria-label') || ''} ${node.textContent || ''}`;
+    best = Math.max(best, extractLikeCountFromText(text));
+  });
+  return best;
+}
+
+function hasVerifiedBadge(article) {
+  if (article.querySelector('[data-testid="icon-verified"], svg[aria-label*="verified" i]')) return true;
+  return Array.from(article.querySelectorAll('svg')).some((svg) => {
+    const label = `${svg.getAttribute('aria-label') || ''} ${svg.getAttribute('data-testid') || ''}`.toLowerCase();
+    return label.includes('verified') || label.includes('icon-verified');
+  });
+}
+""",
+    )
+    return _files(name, target_urls, "Remove low-like verified X replies on tweet threads.", js)
+
+
+def _netflix_roulette(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  injectRouletteButton();
+""",
+        """
+const ROULETTE_BUTTON_ID = 'bf-netflix-roulette-button';
+const ROULETTE_FALLBACK_ID = 'bf-netflix-roulette-fallback';
+
+function findControlsContainer() {
+  const selectors = [
+    '.button-controls-container',
+    '[data-uia="button-controls-container"]',
+    '.previewModal--player-titleTreatment-logo + div',
+    '.jawBoneActions',
+    '.billboard-links',
+    '.buttonControls--container',
+  ];
+  for (const selector of selectors) {
+    const node = document.querySelector(selector);
+    if (node instanceof Element) return node;
+  }
+  const playButton = document.querySelector('button[data-uia*="play" i], a[href*="/watch/"]');
+  if (playButton?.parentElement) return playButton.parentElement;
+  let fallback = document.getElementById(ROULETTE_FALLBACK_ID);
+  if (!fallback) {
+    fallback = document.createElement('div');
+    fallback.id = ROULETTE_FALLBACK_ID;
+    document.documentElement.appendChild(fallback);
+  }
+  return fallback;
+}
+
+function visibleElement(el) {
+  const rect = el.getBoundingClientRect();
+  return rect.width > 20 && rect.height > 20;
+}
+
+function playableCardsInside(root) {
+  const selectors = [
+    '.episode-item',
+    '[data-uia*="episode" i]',
+    '.titleCard',
+    '.slider-item',
+    'a[href*="/watch/"]',
+    'button[data-uia*="play" i]',
+  ].join(',');
+  return Array.from(root.querySelectorAll(selectors)).filter((node) => {
+    if (!(node instanceof HTMLElement)) return false;
+    if (!visibleElement(node)) return false;
+    const disabled = node.getAttribute('aria-disabled') === 'true' || node.hasAttribute('disabled');
+    return !disabled;
+  });
+}
+
+function firstEpisodeOptions() {
+  const rows = Array.from(document.querySelectorAll(
+    '.lolomoRow, .slider, .episodeSelector, [data-list-context], [data-uia*="section" i], [data-uia*="episodes" i]'
+  ));
+  const rowFirstCards = rows
+    .map((row) => playableCardsInside(row)[0])
+    .filter(Boolean);
+  if (rowFirstCards.length > 0) return rowFirstCards;
+  return playableCardsInside(document);
+}
+
+function clickLikeHuman(target) {
+  target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+  const rect = target.getBoundingClientRect();
+  const init = {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2,
+  };
+  target.dispatchEvent(new PointerEvent('pointerdown', init));
+  target.dispatchEvent(new MouseEvent('mousedown', init));
+  target.dispatchEvent(new PointerEvent('pointerup', init));
+  target.dispatchEvent(new MouseEvent('mouseup', init));
+  target.dispatchEvent(new MouseEvent('click', init));
+  target.click?.();
+}
+
+function launchRandomFirstEpisode() {
+  const options = firstEpisodeOptions();
+  if (options.length === 0) return;
+  const index = Math.floor(Math.random() * options.length);
+  clickLikeHuman(options[index]);
+}
+
+function injectRouletteButton() {
+  if (document.getElementById(ROULETTE_BUTTON_ID)) return;
+  const host = findControlsContainer();
+  if (!host) return;
+  const button = document.createElement('button');
+  button.id = ROULETTE_BUTTON_ID;
+  button.type = 'button';
+  button.className = 'bf-netflix-roulette-btn';
+  button.setAttribute('aria-label', 'Play a random first episode');
+  button.textContent = 'Random Episode';
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    launchRandomFirstEpisode();
+  });
+  host.appendChild(button);
+}
+""",
+    )
+    css = """
+.bf-netflix-roulette-btn {
+  align-items: center !important;
+  appearance: none !important;
+  background: #fff !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  color: #141414 !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  font-family: "Netflix Sans", "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+  font-size: clamp(13px, 1.1vw, 18px) !important;
+  font-weight: 700 !important;
+  gap: 8px !important;
+  line-height: 1 !important;
+  margin-left: 10px !important;
+  min-height: 42px !important;
+  padding: 0.8rem 1.45rem !important;
+  position: relative !important;
+  transition: background 160ms ease, transform 120ms ease !important;
+  vertical-align: middle !important;
+  z-index: 20 !important;
+}
+
+.bf-netflix-roulette-btn::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 12px solid currentColor;
+}
+
+.bf-netflix-roulette-btn:hover {
+  background: rgba(255, 255, 255, 0.78) !important;
+}
+
+.bf-netflix-roulette-btn:active {
+  transform: scale(0.98) !important;
+}
+
+#bf-netflix-roulette-fallback {
+  position: fixed !important;
+  right: 38px !important;
+  top: 86px !important;
+  z-index: 2147483646 !important;
+}
+
+#bf-netflix-roulette-fallback .bf-netflix-roulette-btn {
+  margin-left: 0 !important;
+}
+""".strip()
+    return _files(name, target_urls, "Inject a native-looking Netflix random episode button.", js, css)
+
+
+def _doomscroll_guillotine(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  installDoomscrollGuillotine();
+""",
+        """
+const DOOM_LIMIT = 10;
+const DOOM_COUNTER_ID = 'bf-doomscroll-counter';
+const DOOM_WALL_ID = 'bf-doomscroll-wall';
+const seenVideos = new WeakSet();
+const observedVideos = new WeakSet();
+let doomCount = 0;
+let doomLocked = false;
+let centerCheckToken = 0;
+const doomObserver = new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    if (!entry.isIntersecting || doomLocked) return;
+    if (videoCrossesCenter(entry.target)) countVideo(entry.target);
+  });
+}, { threshold: [0.25, 0.5, 0.75, 1] });
+
+function ensureCounter() {
+  let counter = document.getElementById(DOOM_COUNTER_ID);
+  if (!counter) {
+    counter = document.createElement('div');
+    counter.id = DOOM_COUNTER_ID;
+    counter.setAttribute('aria-live', 'polite');
+    counter.setAttribute('role', 'status');
+    document.documentElement.appendChild(counter);
+  }
+  counter.textContent = `${Math.min(doomCount, DOOM_LIMIT)}/${DOOM_LIMIT}`;
+  counter.classList.toggle('bf-doomscroll-counter-danger', doomCount >= DOOM_LIMIT - 2);
+}
+
+function videoCrossesCenter(video) {
+  if (!(video instanceof Element)) return false;
+  const rect = video.getBoundingClientRect();
+  if (rect.width < 120 || rect.height < 160) return false;
+  const centerY = window.innerHeight / 2;
+  const centerX = window.innerWidth / 2;
+  const crossesY = rect.top <= centerY && rect.bottom >= centerY;
+  const broadlyCentered = rect.left <= centerX + window.innerWidth * 0.36 && rect.right >= centerX - window.innerWidth * 0.36;
+  return crossesY && broadlyCentered;
+}
+
+function countVideo(video) {
+  if (!(video instanceof HTMLVideoElement)) return;
+  if (seenVideos.has(video)) return;
+  seenVideos.add(video);
+  doomCount += 1;
+  ensureCounter();
+  if (doomCount >= DOOM_LIMIT) dropGuillotine();
+}
+
+function blockScroll(event) {
+  if (!doomLocked) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+function blockScrollKeys(event) {
+  if (!doomLocked) return;
+  const keys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' ', 'Spacebar'];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+function dropGuillotine() {
+  if (doomLocked) return;
+  doomLocked = true;
+  ensureCounter();
+  document.documentElement.classList.add('bf-doomscroll-locked');
+  document.body?.classList.add('bf-doomscroll-locked');
+
+  let wall = document.getElementById(DOOM_WALL_ID);
+  if (!wall) {
+    wall = document.createElement('div');
+    wall.id = DOOM_WALL_ID;
+    wall.innerHTML = '<div class="bf-doomscroll-wall-card"><div class="bf-doomscroll-wall-count">10/10</div><div class="bf-doomscroll-wall-text">That\\'s enough for today. Go outside.</div></div>';
+    document.documentElement.appendChild(wall);
+  }
+
+  window.addEventListener('wheel', blockScroll, { passive: false, capture: true });
+  window.addEventListener('touchmove', blockScroll, { passive: false, capture: true });
+  window.addEventListener('keydown', blockScrollKeys, { passive: false, capture: true });
+}
+
+function scheduleCenterCheck() {
+  if (centerCheckToken) return;
+  centerCheckToken = requestAnimationFrame(() => {
+    centerCheckToken = 0;
+    if (doomLocked) return;
+    document.querySelectorAll('video').forEach((video) => {
+      if (videoCrossesCenter(video)) countVideo(video);
+    });
+  });
+}
+
+function installDoomscrollGuillotine() {
+  ensureCounter();
+  document.querySelectorAll('video').forEach((video) => {
+    if (observedVideos.has(video)) return;
+    observedVideos.add(video);
+    doomObserver.observe(video);
+  });
+  scheduleCenterCheck();
+}
+
+window.addEventListener('scroll', scheduleCenterCheck, { passive: true });
+window.addEventListener('resize', scheduleCenterCheck, { passive: true });
+""",
+    )
+    css = """
+#bf-doomscroll-counter {
+  align-items: center !important;
+  background: #e50914 !important;
+  border: 3px solid #fff !important;
+  border-radius: 999px !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35), 0 0 0 5px rgba(229, 9, 20, 0.28) !important;
+  color: #fff !important;
+  display: flex !important;
+  font: 900 21px/1 Arial, Helvetica, sans-serif !important;
+  height: 74px !important;
+  justify-content: center !important;
+  letter-spacing: 0 !important;
+  position: fixed !important;
+  right: 22px !important;
+  text-align: center !important;
+  top: 22px !important;
+  width: 74px !important;
+  z-index: 2147483646 !important;
+}
+
+#bf-doomscroll-counter.bf-doomscroll-counter-danger {
+  animation: bf-doom-pulse 700ms ease-in-out infinite alternate !important;
+}
+
+#bf-doomscroll-wall {
+  align-items: center !important;
+  background: #000 !important;
+  color: #fff !important;
+  display: flex !important;
+  font-family: Arial, Helvetica, sans-serif !important;
+  inset: 0 !important;
+  justify-content: center !important;
+  position: fixed !important;
+  z-index: 2147483647 !important;
+}
+
+.bf-doomscroll-wall-card {
+  display: grid !important;
+  gap: 18px !important;
+  max-width: min(680px, calc(100vw - 40px)) !important;
+  text-align: center !important;
+}
+
+.bf-doomscroll-wall-count {
+  color: #e50914 !important;
+  font: 900 72px/0.95 Arial, Helvetica, sans-serif !important;
+}
+
+.bf-doomscroll-wall-text {
+  color: #fff !important;
+  font: 800 clamp(26px, 6vw, 56px)/1.05 Arial, Helvetica, sans-serif !important;
+  letter-spacing: 0 !important;
+}
+
+html.bf-doomscroll-locked,
+body.bf-doomscroll-locked {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+
+@keyframes bf-doom-pulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.08); }
+}
+""".strip()
+    return _files(name, target_urls, "Stop doomscrolling after ten centered videos.", js, css)
+
+
+def _youtube_absolute_focus(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  document.documentElement.classList.add('bf-youtube-absolute-focus');
+  const videoCards = document.querySelectorAll(
+    'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer'
+  );
+  videoCards.forEach((card) => {
+    const thumbnail = card.querySelector('ytd-thumbnail a#thumbnail[href*="/watch"], a#thumbnail[href*="/watch"]');
+    if (thumbnail) {
+      card.classList.add('bf-video-card');
+    } else {
+      hideNode(card);
+    }
+  });
+
+  document.querySelectorAll(
+    '#masthead-container, ytd-masthead, ytd-guide-renderer, ytd-mini-guide-renderer, #guide, #chips-wrapper, ytd-feed-filter-chip-bar-renderer, ytd-reel-shelf-renderer, ytd-rich-section-renderer, ytd-comments, #comments, ytd-watch-next-secondary-results-renderer, #secondary, ytd-merch-shelf-renderer'
+  ).forEach((node) => hideNode(node));
+""",
+    )
+    css = """
+html.bf-youtube-absolute-focus,
+html.bf-youtube-absolute-focus body {
+  background: #000 !important;
+}
+
+html.bf-youtube-absolute-focus #masthead-container,
+html.bf-youtube-absolute-focus ytd-masthead,
+html.bf-youtube-absolute-focus ytd-guide-renderer,
+html.bf-youtube-absolute-focus ytd-mini-guide-renderer,
+html.bf-youtube-absolute-focus #guide,
+html.bf-youtube-absolute-focus #chips-wrapper,
+html.bf-youtube-absolute-focus ytd-feed-filter-chip-bar-renderer,
+html.bf-youtube-absolute-focus ytd-rich-section-renderer,
+html.bf-youtube-absolute-focus ytd-reel-shelf-renderer,
+html.bf-youtube-absolute-focus ytd-comments,
+html.bf-youtube-absolute-focus #comments,
+html.bf-youtube-absolute-focus #secondary,
+html.bf-youtube-absolute-focus ytd-watch-next-secondary-results-renderer,
+html.bf-youtube-absolute-focus ytd-merch-shelf-renderer,
+html.bf-youtube-absolute-focus ytd-continuation-item-renderer,
+html.bf-youtube-absolute-focus tp-yt-app-drawer,
+html.bf-youtube-absolute-focus ytd-mini-guide-renderer,
+html.bf-youtube-absolute-focus #header,
+html.bf-youtube-absolute-focus h1,
+html.bf-youtube-absolute-focus h2,
+html.bf-youtube-absolute-focus h3 {
+  display: none !important;
+}
+
+html.bf-youtube-absolute-focus ytd-page-manager,
+html.bf-youtube-absolute-focus ytd-browse,
+html.bf-youtube-absolute-focus ytd-two-column-browse-results-renderer,
+html.bf-youtube-absolute-focus ytd-rich-grid-renderer,
+html.bf-youtube-absolute-focus #contents.ytd-rich-grid-renderer,
+html.bf-youtube-absolute-focus ytd-section-list-renderer,
+html.bf-youtube-absolute-focus ytd-item-section-renderer,
+html.bf-youtube-absolute-focus ytd-search {
+  margin: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  width: 100% !important;
+}
+
+html.bf-youtube-absolute-focus ytd-rich-grid-renderer {
+  --ytd-rich-grid-items-per-row: 6 !important;
+  --ytd-rich-grid-item-margin: 0 !important;
+}
+
+html.bf-youtube-absolute-focus #contents.ytd-rich-grid-renderer,
+html.bf-youtube-absolute-focus ytd-rich-grid-row,
+html.bf-youtube-absolute-focus ytd-section-list-renderer #contents,
+html.bf-youtube-absolute-focus ytd-item-section-renderer #contents {
+  display: grid !important;
+  gap: 0 !important;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
+  align-items: start !important;
+}
+
+html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card,
+html.bf-youtube-absolute-focus ytd-video-renderer.bf-video-card,
+html.bf-youtube-absolute-focus ytd-grid-video-renderer.bf-video-card,
+html.bf-youtube-absolute-focus ytd-compact-video-renderer.bf-video-card {
+  display: block !important;
+  margin: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  width: 100% !important;
+}
+
+html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #details,
+html.bf-youtube-absolute-focus ytd-video-renderer.bf-video-card #details,
+html.bf-youtube-absolute-focus ytd-grid-video-renderer.bf-video-card #details,
+html.bf-youtube-absolute-focus ytd-compact-video-renderer.bf-video-card #details,
+html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #metadata,
+html.bf-youtube-absolute-focus ytd-video-renderer.bf-video-card #metadata,
+html.bf-youtube-absolute-focus ytd-grid-video-renderer.bf-video-card #metadata,
+html.bf-youtube-absolute-focus ytd-compact-video-renderer.bf-video-card #metadata,
+html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #dismissible > #avatar,
+html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card ytd-channel-name,
+html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #video-title,
+html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #metadata-line {
+  display: none !important;
+}
+
+html.bf-youtube-absolute-focus ytd-thumbnail,
+html.bf-youtube-absolute-focus ytd-thumbnail a#thumbnail,
+html.bf-youtube-absolute-focus ytd-thumbnail img,
+html.bf-youtube-absolute-focus ytd-thumbnail yt-image,
+html.bf-youtube-absolute-focus ytd-thumbnail .yt-core-image {
+  border-radius: 0 !important;
+  display: block !important;
+  height: auto !important;
+  margin: 0 !important;
+  object-fit: cover !important;
+  padding: 0 !important;
+  width: 100% !important;
+}
+
+html.bf-youtube-absolute-focus ytd-thumbnail a#thumbnail {
+  aspect-ratio: 16 / 9 !important;
+  background: #000 !important;
+  overflow: hidden !important;
+}
+
+html.bf-youtube-absolute-focus ytd-watch-flexy #primary {
+  margin: 0 !important;
+  max-width: 100% !important;
+  padding: 0 !important;
+}
+""".strip()
+    return _files(name, target_urls, "Turn YouTube into a thumbnail-only focus grid.", js, css)
+
+
 def _reddit_sidebar(query: str, target_urls: list[str], name: str) -> dict[str, str]:
     js = _runtime_wrapper(
         """
@@ -754,6 +1295,10 @@ BUILDERS: dict[str, Callable[[str, list[str], str], dict[str, str]]] = {
     "linkedin-page-filter": _linkedin_page_filter,
     "x-for-you": _x_for_you,
     "x-trending": _x_trending,
+    "x-engagement-bait": _x_engagement_bait,
+    "netflix-roulette": _netflix_roulette,
+    "doomscroll-guillotine": _doomscroll_guillotine,
+    "youtube-absolute-focus": _youtube_absolute_focus,
     "reddit-sidebar": _reddit_sidebar,
     "reddit-collapse-comments": _reddit_collapse_comments,
 }

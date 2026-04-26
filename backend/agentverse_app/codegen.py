@@ -24,10 +24,12 @@ USE_CASE_RULES: dict[str, dict[str, Any]] = {
     "youtube-comments": {"required_any": ["ytd-comments", "#comments"], "min_signals": 1, "behavior": "hide"},
     "youtube-recommendations": {"required_any": ["#secondary", "ytd-watch-next-secondary-results-renderer", "ytd-compact-video-renderer"], "min_signals": 1, "behavior": "hide"},
     "youtube-keyword-filter": {"required_any": ["ytd-rich-item-renderer", "ytd-video-renderer", "/api/classify"], "min_signals": 2, "behavior": "classify"},
+    "youtube-absolute-focus": {"required_any": ["bf-youtube-absolute-focus", "ytd-thumbnail", "ytd-rich-grid-renderer", "#masthead-container", "#secondary"], "min_signals": 3, "behavior": "hide", "require_mutation_observer": True},
     "instagram-nav": {"required_any": ["/reels", "/explore", "/direct", "role=\"listitem\"", "role=listitem"], "min_signals": 2, "behavior": "hide"},
     "instagram-suggested-posts": {"required_any": ["suggested", "article", "role=\"main\"", "role='main'"], "min_signals": 2, "behavior": "hide"},
     "instagram-floating-messages": {"required_any": ["position: fixed", "getboundingclientrect", "direct", "messages"], "min_signals": 2, "behavior": "hide"},
     "instagram-engagement-counts": {"required_any": ["likes", "comments", "aria-label"], "min_signals": 1, "behavior": "hide"},
+    "doomscroll-guillotine": {"required_any": ["intersectionobserver", "bf-doomscroll-counter", "bf-doomscroll-wall", "10/10", "wheel"], "min_signals": 4, "behavior": "inject", "require_mutation_observer": True},
     "gmail-tabs": {"required_any": ["role=tab", "role=\"tab\"", "promotions", "social"], "min_signals": 2, "behavior": "hide"},
     "gmail-sender-highlight": {"required_any": ["sender", "role=row", "unread", "tr"], "min_signals": 2, "behavior": "highlight"},
     "gmail-focus": {"required_any": ["side panel", "advertisement", "aria-label*=\"meet\"", "aria-label*=\"chat\""], "min_signals": 1, "behavior": "hide"},
@@ -43,6 +45,8 @@ USE_CASE_RULES: dict[str, dict[str, Any]] = {
     "linkedin-page-filter": {"required_any": ["/api/classify", "company", "page"], "min_signals": 1, "behavior": "classify"},
     "x-for-you": {"required_any": ["for you", "following", "data-testid"], "min_signals": 2, "behavior": "hide"},
     "x-trending": {"required_any": ["trending", "what's happening", "right", "complementary"], "min_signals": 1, "behavior": "hide"},
+    "x-engagement-bait": {"required_any": ["status", "icon-verified", "cellinnerdiv", "likes", "article"], "min_signals": 4, "behavior": "hide", "require_mutation_observer": True},
+    "netflix-roulette": {"required_any": ["button-controls-container", "bf-netflix-roulette", "random episode", "/watch/", "pointerevent"], "min_signals": 3, "behavior": "inject", "require_mutation_observer": True},
     "reddit-sidebar": {"required_any": ["aside", "complementary", "shreddit", "reddit-sidebar", "data-testid", "getboundingclientrect"], "min_signals": 3, "behavior": "hide"},
     "reddit-collapse-comments": {"required_any": ["comment", "collapse", "aria-expanded", "reply"], "min_signals": 1, "behavior": "collapse"},
 }
@@ -154,6 +158,51 @@ def _extract_json(content: str) -> dict[str, Any] | None:
         return json.loads(match.group(0))
     except json.JSONDecodeError:
         return None
+
+
+_SITE_ALIASES: dict[str, tuple[str, ...]] = {
+    "youtube": ("youtube", "youtube.com", "youtu.be"),
+    "instagram": ("instagram", "instagram.com"),
+    "tiktok": ("tiktok", "tiktok.com"),
+    "gmail": ("gmail", "mail.google.com"),
+    "outlook": ("outlook", "outlook.com", "outlook.live.com", "outlook.office.com", "office.com"),
+    "calendar": ("calendar", "calendar.google.com", "google.com/calendar"),
+    "linkedin": ("linkedin", "linkedin.com"),
+    "reddit": ("reddit", "reddit.com", "old.reddit.com"),
+    "x": ("x", "x.com", "twitter", "twitter.com"),
+    "twitter": ("x", "x.com", "twitter", "twitter.com"),
+    "netflix": ("netflix", "netflix.com"),
+}
+
+
+def _entry_has_site_alignment(
+    entry: dict[str, Any],
+    query_lower: str,
+    target_urls: list[str],
+) -> bool:
+    """True when a site-specific corpus entry applies to this request/target.
+
+    Generic words like "sidebar" can match several corpus entries. The quality
+    gate should only enforce a site's DOM selectors when the query or manifest
+    target actually names that site.
+    """
+    sites = [str(site).lower() for site in entry.get("sites", []) if str(site).strip()]
+    if not sites:
+        return True
+
+    haystack = f"{query_lower} {' '.join(target_urls)}".lower()
+    tokens = set(re.findall(r"[a-z0-9]+", haystack))
+    for site in sites:
+        aliases = _SITE_ALIASES.get(site, (site,))
+        for alias in aliases:
+            alias_lower = alias.lower()
+            if "." in alias_lower or "/" in alias_lower:
+                if alias_lower in haystack:
+                    return True
+                continue
+            if alias_lower in tokens:
+                return True
+    return False
 
 
 async def _generate_with_llm(
@@ -377,6 +426,8 @@ def _quality_issues(
     for entry in matched_entries:
         entry_id = str(entry.get("id", ""))
         if focus_use_case_id and entry_id != focus_use_case_id:
+            continue
+        if not focus_use_case_id and not _entry_has_site_alignment(entry, query_lower, target_urls):
             continue
         terms = [str(term).lower() for term in entry.get("terms", [])]
         if terms and not any(

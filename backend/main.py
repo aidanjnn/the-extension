@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -5,6 +7,7 @@ import re
 import shutil
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -191,6 +194,96 @@ def _safe_filename(name: str, fallback: str) -> str:
     return cleaned or fallback
 
 
+def _safe_identifier(value: str, *, label: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{3,80}", value or ""):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+    return value
+
+
+def _public_backend_base_url() -> str:
+    return (agentverse_settings.public_backend_base_url or "http://localhost:8000").rstrip("/")
+
+
+def _download_url_for_project(project_id: str) -> str:
+    return f"{_public_backend_base_url()}/download/{project_id}.zip"
+
+
+def _share_store_dir():
+    share_dir = DEMO_CODE_BASE / "_shares"
+    share_dir.mkdir(parents=True, exist_ok=True)
+    return share_dir
+
+
+def _share_path(share_id: str):
+    safe_id = _safe_identifier(share_id, label="share id")
+    return _share_store_dir() / f"{safe_id}.json"
+
+
+def _share_url_for_id(share_id: str) -> str:
+    return f"bf.link/{share_id}"
+
+
+def _extract_share_id(code: str) -> str:
+    raw = (code or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Share code is required")
+    tokens = re.findall(r"[A-Za-z0-9_-]{6,80}", raw)
+    candidate = tokens[-1] if tokens else raw
+    return _safe_identifier(candidate, label="share code")
+
+
+def _extension_name_from_files(files: dict[str, str], fallback: str) -> str:
+    try:
+        manifest = json.loads(files.get("manifest.json", "{}"))
+    except json.JSONDecodeError:
+        return fallback
+    name = manifest.get("name") if isinstance(manifest, dict) else None
+    return str(name or fallback)[:80]
+
+
+def _read_share_payload(share_id: str) -> dict:
+    path = _share_path(share_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Share code not found")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(status_code=500, detail="Share payload is unreadable")
+    if not isinstance(payload, dict) or payload.get("type") != "extension":
+        raise HTTPException(status_code=400, detail="Unsupported share payload")
+    return payload
+
+
+def _materialize_share(share_id: str) -> ShareImportResponse:
+    payload = _read_share_payload(share_id)
+    files = payload.get("files")
+    if not isinstance(files, dict) or "manifest.json" not in files:
+        raise HTTPException(status_code=400, detail="Share payload has no extension files")
+    clean_files = {
+        str(path): str(content)
+        for path, content in files.items()
+        if isinstance(path, str) and isinstance(content, str)
+    }
+    project_id = f"sync_{uuid.uuid4().hex}"
+    reset_project_workspace(project_id)
+    write_project_files(project_id, clean_files)
+    validation = validate_project_extension(project_id)
+    if not validation.get("ok"):
+        raise HTTPException(status_code=400, detail=validation)
+    packaged = package_project_extension(project_id)
+    name = str(payload.get("name") or _extension_name_from_files(clean_files, project_id))
+    return ShareImportResponse(
+        share_id=share_id,
+        share_url=_share_url_for_id(share_id),
+        project_id=project_id,
+        name=name,
+        extension_path=str(packaged["extension_path"]),
+        zip_path=str(packaged["zip_path"]),
+        download_url=_download_url_for_project(project_id),
+        load_instructions=str(packaged["load_instructions"]),
+    )
+
+
 @app.get("/download/{project_id}.zip")
 async def download_extension(project_id: str):
     """Public endpoint that serves the packaged extension zip.
@@ -264,6 +357,38 @@ class DomEditExportRequest(BaseModel):
 
 class DomEditExportResponse(BaseModel):
     project_id: str
+    extension_path: str
+    zip_path: str
+    download_url: str
+    load_instructions: str
+
+
+class ShareProjectResponse(BaseModel):
+    share_id: str
+    share_url: str
+    project_id: str
+    name: str
+    created_at: str
+
+
+class ShareResolveResponse(BaseModel):
+    share_id: str
+    share_url: str
+    source_project_id: str
+    name: str
+    created_at: str
+    file_count: int
+
+
+class ShareImportRequest(BaseModel):
+    code: str
+
+
+class ShareImportResponse(BaseModel):
+    share_id: str
+    share_url: str
+    project_id: str
+    name: str
     extension_path: str
     zip_path: str
     download_url: str
@@ -502,6 +627,65 @@ async def export_dom_edits(req: DomEditExportRequest):
         download_url=download_url,
         load_instructions=str(packaged["load_instructions"]),
     )
+
+
+@app.post("/api/share/project/{project_id}", response_model=ShareProjectResponse)
+async def share_project(project_id: str):
+    project_id = _safe_identifier(project_id, label="project id")
+    project_dir = DEMO_CODE_BASE / project_id
+    if not (project_dir / "manifest.json").exists():
+        raise HTTPException(status_code=404, detail="Project extension not found")
+    files = read_project_files(project_id)
+    if "manifest.json" not in files or "content.js" not in files:
+        raise HTTPException(status_code=400, detail="Project is not a shareable extension")
+
+    share_id = uuid.uuid4().hex[:10]
+    created_at = datetime.now(timezone.utc).isoformat()
+    name = _extension_name_from_files(files, project_id)
+    payload = {
+        "version": 1,
+        "type": "extension",
+        "share_id": share_id,
+        "source_project_id": project_id,
+        "name": name,
+        "created_at": created_at,
+        "files": files,
+    }
+    _share_path(share_id).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return ShareProjectResponse(
+        share_id=share_id,
+        share_url=_share_url_for_id(share_id),
+        project_id=project_id,
+        name=name,
+        created_at=created_at,
+    )
+
+
+@app.get("/api/share/{share_id}", response_model=ShareResolveResponse)
+async def resolve_share(share_id: str):
+    share_id = _safe_identifier(share_id, label="share id")
+    payload = _read_share_payload(share_id)
+    files = payload.get("files") if isinstance(payload.get("files"), dict) else {}
+    return ShareResolveResponse(
+        share_id=share_id,
+        share_url=_share_url_for_id(share_id),
+        source_project_id=str(payload.get("source_project_id") or ""),
+        name=str(payload.get("name") or share_id),
+        created_at=str(payload.get("created_at") or ""),
+        file_count=len(files),
+    )
+
+
+@app.post("/api/share/{share_id}/materialize", response_model=ShareImportResponse)
+async def materialize_share(share_id: str):
+    share_id = _safe_identifier(share_id, label="share id")
+    return _materialize_share(share_id)
+
+
+@app.post("/api/share/import", response_model=ShareImportResponse)
+async def import_share(req: ShareImportRequest):
+    share_id = _extract_share_id(req.code)
+    return _materialize_share(share_id)
 
 
 @app.post("/api/load-extension/{project_id}")

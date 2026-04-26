@@ -65,6 +65,30 @@ DOM_IMPLEMENTATION_CORPUS: list[dict[str, Any]] = [
         ),
     },
     {
+        "id": "youtube-absolute-focus",
+        "title": "YouTube Absolute Thumbnail Focus Mode",
+        "sites": ["youtube"],
+        "terms": [
+            "absolute focus",
+            "focus mode",
+            "distractions",
+            "only thumbnails",
+            "thumbnail grid",
+            "matrix",
+            "brutalist",
+        ],
+        "guidance": (
+            "YouTube absolute focus: use a document class plus YouTube-specific "
+            "selectors to hide masthead/top navigation, guide/mini-guide, chips, "
+            "comments, related/sidebar, rich sections, reels shelves, metadata, "
+            "titles, channel names, avatars, and header tags. Preserve only video "
+            "cards that contain `ytd-thumbnail a#thumbnail[href*='/watch']`, hide "
+            "non-video rich items, and reflow `#contents.ytd-rich-grid-renderer` "
+            "or section contents into an edge-to-edge CSS grid. Do not hide "
+            "`ytd-app` or the whole page root."
+        ),
+    },
+    {
         "id": "instagram-nav",
         "title": "Remove Instagram Sidebar Items",
         "sites": ["instagram"],
@@ -110,6 +134,30 @@ DOM_IMPLEMENTATION_CORPUS: list[dict[str, Any]] = [
             "Instagram engagement counts: target count text near feed article action "
             "bars and links/buttons related to likes/comments. Keep action buttons "
             "usable unless the user asks to remove them. Avoid hiding the full article."
+        ),
+    },
+    {
+        "id": "doomscroll-guillotine",
+        "title": "Instagram/TikTok Doomscroll Guillotine",
+        "sites": ["instagram", "tiktok"],
+        "terms": [
+            "doomscroll",
+            "doom scrolling",
+            "10 videos",
+            "ten videos",
+            "go outside",
+            "guillotine",
+            "counter",
+            "video limit",
+        ],
+        "guidance": (
+            "Short-form doomscroll limiter: observe `video` elements with an "
+            "IntersectionObserver plus scroll/resize center-line checks. Count each "
+            "unique HTMLVideoElement once when it crosses the center of the viewport. "
+            "Inject a fixed red circular counter in the top-right showing `X/10`. "
+            "At 10, add a full-screen black overlay with z-index 2147483647 and lock "
+            "scroll by adding classes to html/body plus wheel/touch/key event guards. "
+            "Do not style document.body directly; use classes and CSS."
         ),
     },
     {
@@ -282,6 +330,53 @@ DOM_IMPLEMENTATION_CORPUS: list[dict[str, Any]] = [
         ),
     },
     {
+        "id": "x-engagement-bait",
+        "title": "Remove Low-Like Verified X Replies",
+        "sites": ["twitter", "x"],
+        "terms": [
+            "verified",
+            "blue check",
+            "blue checkmark",
+            "engagement bait",
+            "spam replies",
+            "bot replies",
+            "low likes",
+            "less than 100",
+        ],
+        "guidance": (
+            "X/Twitter engagement bait reply cleanup: only run on tweet thread URLs "
+            "matching `/status/<id>` so the home timeline infinite scroll is never "
+            "broken. Inside `[data-testid='primaryColumn']`, collect tweet `article` "
+            "nodes and skip the first article because it is the original tweet. For "
+            "reply articles, detect verified badges via `[data-testid='icon-verified']` "
+            "or verified SVG aria labels. Parse like counts from role=group or like "
+            "button aria/text, handling commas and K/M suffixes. Remove the owning "
+            "`[data-testid='cellInnerDiv']` only when verified and under 100 likes."
+        ),
+    },
+    {
+        "id": "netflix-roulette",
+        "title": "Netflix TV Roulette",
+        "sites": ["netflix"],
+        "terms": [
+            "random episode",
+            "roulette",
+            "tv roulette",
+            "random show",
+            "decision paralysis",
+            "first episode",
+        ],
+        "guidance": (
+            "Netflix roulette: inject one visible button into native controls such as "
+            "`.button-controls-container`, `[data-uia='button-controls-container']`, "
+            "`.jawBoneActions`, or `.billboard-links`, with CSS that mimics Netflix "
+            "white play buttons. On click, find visible playable cards from episode "
+            "items, title cards, slider items, or `/watch/` anchors. Prefer the first "
+            "playable card from each row/section, choose a random row, scroll it into "
+            "view, and dispatch pointer/mouse/click events."
+        ),
+    },
+    {
         "id": "reddit-sidebar",
         "title": "Remove Reddit Sidebar And Recent Posts",
         "sites": ["reddit"],
@@ -332,6 +427,12 @@ SITE_DOM_BOOTSTRAP: dict[str, str] = {
         "infinite scroll; use scoped selectors and re-run on route changes. Avoid "
         "hiding main or every article."
     ),
+    "tiktok": (
+        "TikTok (general): short-form feed built around `video` elements, dynamic "
+        "infinite scroll, and route changes. Prefer IntersectionObserver plus "
+        "viewport center checks for video tracking. Use fixed overlays carefully and "
+        "lock scroll with classes/event guards rather than direct body styling."
+    ),
     "gmail": (
         "Gmail (general): list rows in table-like structures, role=row, tr, category "
         "tabs role=tab. Split panes: list, thread, right rail. Class names are obfuscated; "
@@ -354,6 +455,12 @@ SITE_DOM_BOOTSTRAP: dict[str, str] = {
         "X / Twitter (general): [data-testid] on tweets, side nav, search, trends; "
         "primary column vs sidebar. Promoted/Ad labels, placement tracking. Popstate + "
         "MutationObserver. Never hide the whole [data-testid=primaryColumn] or root layout."
+    ),
+    "netflix": (
+        "Netflix (general): dynamic React UI with changing generated classes but useful "
+        "stable-ish signals like `.button-controls-container`, `.titleCard`, slider rows, "
+        "episode items, `[data-uia]`, and `/watch/` anchors. Inject controls idempotently, "
+        "style them to match Netflix buttons, and dispatch real pointer/mouse events."
     ),
     "reddit": (
         "Reddit (general): custom elements (shreddit-*), post threads, comment trees, "
@@ -445,6 +552,7 @@ def canonical_sites_in_target_urls(target_urls: list[str]) -> list[str]:
             ("reddit", "reddit.com"),
             ("reddit", "old.reddit"),
             ("instagram", "instagram.com"),
+            ("tiktok", "tiktok.com"),
             ("gmail", "mail.google.com"),
             ("gmail", "mail.google"),
             ("outlook", "outlook."),
@@ -455,6 +563,7 @@ def canonical_sites_in_target_urls(target_urls: list[str]) -> list[str]:
             ("linkedin", "linkedin.com"),
             ("x", "x.com"),
             ("x", "twitter.com"),
+            ("netflix", "netflix.com"),
         ):
             if needle in h and key not in found:
                 found.append(key)

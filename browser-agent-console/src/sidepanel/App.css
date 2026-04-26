@@ -1221,6 +1221,46 @@ button {
   margin-top: 2px;
 }
 
+.extension-share-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  padding: 7px;
+  border: 1px solid rgba(122, 167, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(122, 167, 255, 0.08);
+}
+
+.extension-share-code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bf-text);
+  font-family: 'SF Mono', 'JetBrains Mono', monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extension-share-copy {
+  border: 1px solid var(--bf-border);
+  border-radius: 7px;
+  background: var(--bf-bg-elevated);
+  color: var(--bf-text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 8px;
+  transition: background var(--bf-ease), color var(--bf-ease), border-color var(--bf-ease);
+}
+
+.extension-share-copy:hover {
+  background: var(--bf-bg-card);
+  border-color: var(--bf-border-strong);
+  color: var(--bf-text);
+}
+
 /* ============================================================
    Chip system (in-message and input)
    ============================================================ */
@@ -1988,6 +2028,93 @@ button {
 
 .dom-preview-card {
   border-color: rgba(122, 167, 255, 0.38);
+}
+
+/* ============================================================
+   Internet Sync
+   ============================================================ */
+.sync-panel {
+  display: grid;
+  gap: 10px;
+  margin: 8px 12px 0;
+  padding: 12px;
+  border: 1px solid rgba(167, 139, 250, 0.28);
+  border-radius: var(--bf-radius-lg);
+  background: var(--bf-bg-card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.sync-copy {
+  display: grid;
+  gap: 4px;
+  color: var(--bf-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sync-kicker {
+  color: var(--bf-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sync-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.sync-input {
+  min-width: 0;
+  border: 1px solid var(--bf-border);
+  border-radius: 9px;
+  background: var(--bf-bg-input);
+  color: var(--bf-text);
+  font: 12px/1.3 'SF Mono', 'JetBrains Mono', monospace;
+  outline: none;
+  padding: 8px 10px;
+  transition: border-color var(--bf-ease), box-shadow var(--bf-ease);
+}
+
+.sync-input:focus {
+  border-color: var(--bf-accent);
+  box-shadow: 0 0 0 3px var(--bf-accent-soft);
+}
+
+.sync-import-btn {
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  border-radius: 9px;
+  background: var(--bf-accent-soft);
+  color: var(--bf-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 72px;
+  padding: 8px 10px;
+  transition: transform 140ms ease-out, border-color var(--bf-ease), background var(--bf-ease);
+}
+
+.sync-import-btn:hover:not(:disabled) {
+  border-color: rgba(167, 139, 250, 0.7);
+  background: rgba(167, 139, 250, 0.24);
+}
+
+.sync-import-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.sync-import-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sync-status {
+  color: #7dd3fc;
+  font-size: 11.5px;
+  line-height: 1.35;
 }
 
 /* ============================================================

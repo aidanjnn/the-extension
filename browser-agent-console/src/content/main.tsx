@@ -245,11 +245,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 })
 
-const container = document.createElement('div')
-container.id = 'browser-forge-app'
-document.body.appendChild(container)
-createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+function mountBrowserForgeApp() {
+  if (document.getElementById('browser-forge-app')) return
+  const mountTarget = document.body || document.documentElement
+  if (!mountTarget) return
+  const container = document.createElement('div')
+  container.id = 'browser-forge-app'
+  mountTarget.appendChild(container)
+  createRoot(container).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+}
+
+if (document.body) {
+  mountBrowserForgeApp()
+} else {
+  document.addEventListener('DOMContentLoaded', mountBrowserForgeApp, { once: true })
+}

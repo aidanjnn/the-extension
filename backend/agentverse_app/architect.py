@@ -21,11 +21,13 @@ def _infer_target_urls(query: str, active_tabs: list[dict]) -> list[str]:
     lowered = query.lower()
     if "instagram" in lowered:
         return ["https://www.instagram.com/*", "https://instagram.com/*"]
+    if "tiktok" in lowered:
+        return ["https://www.tiktok.com/*", "https://tiktok.com/*"]
     if any(term in lowered for term in ("messages", "message bar", "direct", "dm")):
         return ["https://www.instagram.com/*", "https://instagram.com/*"]
     if "youtube" in lowered:
         return ["https://www.youtube.com/*"]
-    if "twitter" in lowered or "x.com" in lowered:
+    if "twitter" in lowered or "x.com" in lowered or re.search(r"\bx\b", lowered):
         return ["https://x.com/*", "https://twitter.com/*"]
     if "gmail" in lowered:
         return ["https://mail.google.com/*"]
@@ -47,6 +49,8 @@ def _infer_target_urls(query: str, active_tabs: list[dict]) -> list[str]:
         return ["https://www.linkedin.com/*", "https://linkedin.com/*"]
     if "reddit" in lowered:
         return ["https://www.reddit.com/*", "https://reddit.com/*"]
+    if "netflix" in lowered:
+        return ["https://www.netflix.com/*", "https://netflix.com/*"]
 
     # If the query does not name a site, prefer the user's currently active tab.
     active_first = [tab for tab in active_tabs if tab.get("active")]
@@ -90,6 +94,7 @@ _BRAND_CASE = {
     "reddit": "Reddit",
     "spotify": "Spotify",
     "netflix": "Netflix",
+    "tiktok": "TikTok",
     "twitch": "Twitch",
     "medium": "Medium",
     "substack": "Substack",

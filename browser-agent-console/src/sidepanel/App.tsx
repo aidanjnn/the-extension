@@ -36,6 +36,10 @@ const SUGGESTION_TEMPLATES = [
   'create a font changer extension',
   'create a page zoom extension',
   'create a new tab customizer extension',
+  'remove verified spam replies on X with less than 100 likes',
+  'add Netflix random episode roulette',
+  'stop Instagram doomscrolling after 10 videos',
+  'turn YouTube into an absolute thumbnail focus grid',
   'hide all ads on this page',
   'hide the sidebar on this page',
   'hide the comments section',
@@ -135,6 +139,20 @@ type DomExportResult = {
   load_instructions: string
 }
 
+type ShareProjectResult = {
+  share_id: string
+  share_url: string
+  project_id: string
+  name: string
+  created_at: string
+}
+
+type SyncImportResult = DomExportResult & {
+  share_id: string
+  share_url: string
+  name: string
+}
+
 const TOOL_LABELS: Record<string, string> = {
   list_dir: 'List directory',
   read_file: 'Read',
@@ -189,6 +207,10 @@ function ExtensionInstallCard({ path, projectId }: { path: string; projectId?: s
   const [state, setState] = useState<InstallCardState>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [copied, setCopied] = useState(false)
+  const [shareLoading, setShareLoading] = useState(false)
+  const [shareResult, setShareResult] = useState<ShareProjectResult | null>(null)
+  const [shareCopied, setShareCopied] = useState(false)
+  const [shareError, setShareError] = useState('')
 
   const handleLoad = async () => {
     if (!projectId) return
@@ -215,6 +237,32 @@ function ExtensionInstallCard({ path, projectId }: { path: string; projectId?: s
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const handleShare = async () => {
+    if (!projectId || shareLoading) return
+    setShareLoading(true)
+    setShareError('')
+    try {
+      const res = await fetch(`${API_URL}/api/share/project/${projectId}`, { method: 'POST' })
+      if (!res.ok) throw new Error(await res.text())
+      const data = (await res.json()) as ShareProjectResult
+      setShareResult(data)
+      await navigator.clipboard.writeText(data.share_url)
+      setShareCopied(true)
+      setTimeout(() => setShareCopied(false), 1800)
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : 'Could not create share link.')
+    } finally {
+      setShareLoading(false)
+    }
+  }
+
+  const handleCopyShare = async () => {
+    if (!shareResult) return
+    await navigator.clipboard.writeText(shareResult.share_url)
+    setShareCopied(true)
+    setTimeout(() => setShareCopied(false), 1800)
+  }
+
   return (
     <div className="extension-install-card">
       <div className="extension-install-header">
@@ -239,7 +287,31 @@ function ExtensionInstallCard({ path, projectId }: { path: string; projectId?: s
             </svg>
             Load Extension
           </button>
+          <button
+            className="extension-install-btn"
+            onClick={handleShare}
+            disabled={!projectId || shareLoading}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+            </svg>
+            {shareLoading ? 'Sharing…' : 'Share'}
+          </button>
         </div>
+      )}
+
+      {shareResult && (
+        <div className="extension-share-row">
+          <span className="extension-share-code">{shareResult.share_url}</span>
+          <button type="button" className="extension-share-copy" onClick={handleCopyShare}>
+            {shareCopied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+      )}
+
+      {shareError && (
+        <div className="extension-install-status extension-install-error">{shareError}</div>
       )}
 
       {state === 'loading' && (
@@ -294,6 +366,22 @@ function ExtensionInstallCard({ path, projectId }: { path: string; projectId?: s
             </button>
           </div>
         </>
+      )}
+
+      {state !== 'idle' && projectId && (
+        <div className="extension-install-actions">
+          <button
+            className="extension-install-btn"
+            onClick={handleShare}
+            disabled={shareLoading}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+            </svg>
+            {shareLoading ? 'Sharing…' : 'Share'}
+          </button>
+        </div>
       )}
     </div>
   )
@@ -608,6 +696,10 @@ export default function App() {
   const [domEdits, setDomEdits] = useState<DomEditOperation[]>([])
   const [domExportResult, setDomExportResult] = useState<DomExportResult | null>(null)
   const [domExporting, setDomExporting] = useState(false)
+  const [syncOpen, setSyncOpen] = useState(false)
+  const [syncInput, setSyncInput] = useState('')
+  const [syncImporting, setSyncImporting] = useState(false)
+  const [syncStatus, setSyncStatus] = useState('')
   const didEnsureDefaultProjectRef = useRef(false)
   const activeDomPageKeyRef = useRef<string | null>(null)
 
@@ -2666,7 +2758,7 @@ export default function App() {
 
       // Extension ready for install
       if (data.type === 'extension_ready') {
-        parts.push({ type: 'extension_ready', path: data.path })
+        parts.push({ type: 'extension_ready', path: data.path, projectId: data.project_id })
         ensureAssistantMessage()
         updateAssistantMessage()
         return
@@ -2973,6 +3065,51 @@ export default function App() {
     }
   }
 
+  const handleSyncImport = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const code = syncInput.trim()
+    if (!code || syncImporting) return
+    setSyncImporting(true)
+    setSyncStatus('')
+    setError('')
+    try {
+      const res = await fetch(`${API_URL}/api/share/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      })
+      if (!res.ok) {
+        throw new Error(await res.text())
+      }
+      const data = (await res.json()) as SyncImportResult
+      let loaded = false
+      try {
+        const loadRes = await fetch(`${API_URL}/api/load-extension/${data.project_id}`, { method: 'POST' })
+        const loadData = await loadRes.json()
+        loaded = Boolean(loadData?.success)
+      } catch {
+        loaded = false
+      }
+      setSyncInput('')
+      setSyncStatus(loaded ? `${data.name} imported and loaded.` : `${data.name} imported. Load it from the card below.`)
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: loaded
+            ? `Internet Sync imported and loaded ${data.share_url}.`
+            : `Internet Sync imported ${data.share_url}.`,
+          created_at: new Date().toISOString(),
+          parts: [{ type: 'extension_ready', path: data.extension_path, projectId: data.project_id }],
+        },
+      ])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not import that share link.')
+    } finally {
+      setSyncImporting(false)
+    }
+  }
+
   return (
     <div className="app">
       {/* Sidebar overlay */}
@@ -3079,6 +3216,17 @@ export default function App() {
                 </button>
               </>
             )}
+            <button
+              className={`icon-btn ${syncOpen ? 'active' : ''}`}
+              onClick={() => setSyncOpen((value) => !value)}
+              title="Internet Sync"
+              aria-expanded={syncOpen}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+              </svg>
+            </button>
             <div className="panel-mode-wrapper" ref={panelMenuRef}>
               <button
                 className="icon-btn"
@@ -3174,6 +3322,28 @@ export default function App() {
               </div>
             )}
           </div>
+        )}
+
+        {syncOpen && (
+          <form className="sync-panel" onSubmit={handleSyncImport}>
+            <div className="sync-copy">
+              <span className="sync-kicker">Internet Sync</span>
+              <span>Paste a Browser Forge share link or code to recreate the same extension locally.</span>
+            </div>
+            <div className="sync-input-row">
+              <input
+                className="sync-input"
+                value={syncInput}
+                onChange={(event) => setSyncInput(event.target.value)}
+                placeholder="bf.link/abc123def0"
+                spellCheck={false}
+              />
+              <button className="sync-import-btn" type="submit" disabled={!syncInput.trim() || syncImporting}>
+                {syncImporting ? 'Importing…' : 'Import'}
+              </button>
+            </div>
+            {syncStatus && <div className="sync-status">{syncStatus}</div>}
+          </form>
         )}
 
         {appMode === 'dom' && (
@@ -3335,7 +3505,7 @@ export default function App() {
                     )}
                     {nonToolParts.map((part, j) =>
                       part.type === 'extension_ready' ? (
-                        <ExtensionInstallCard key={j} path={part.path} projectId={part.projectId ?? activeProject?.id} />
+                        <ExtensionInstallCard key={j} path={part.path} projectId={part.projectId} />
                       ) : (
                         <div key={j} className="message-content bf-part-in">
                           <ReactMarkdown>{part.content}</ReactMarkdown>
