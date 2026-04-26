@@ -146,35 +146,60 @@ async def stream_orchestrator_events(
     yield {"type": "content", "content": "Agentverse Orchestrator: starting build.\n"}
 
     yield {"type": "tool_start", "name": "Agentverse Architect", "args": {}}
-    architect = await run_architect(ArchitectRequest(build=build))
+    try:
+        architect = await run_architect(ArchitectRequest(build=build))
+    except Exception as exc:
+        yield {"type": "tool_end", "name": "Agentverse Architect"}
+        yield {"type": "error", "message": f"Architect failed: {exc}"}
+        return
     yield {"type": "tool_end", "name": "Agentverse Architect"}
     yield {"type": "content", "content": f"{architect.summary}\n"}
 
     yield {"type": "tool_start", "name": "Agentverse RAG", "args": {}}
-    rag = await run_rag(
-        RagRequest(job_id=build.job_id, spec=architect.spec, query=build.query)
-    )
+    try:
+        rag = await run_rag(
+            RagRequest(job_id=build.job_id, spec=architect.spec, query=build.query)
+        )
+    except Exception as exc:
+        yield {"type": "tool_end", "name": "Agentverse RAG"}
+        yield {"type": "error", "message": f"RAG failed: {exc}"}
+        return
     yield {"type": "tool_end", "name": "Agentverse RAG"}
     yield {"type": "content", "content": f"{rag.summary}\n"}
 
     yield {"type": "tool_start", "name": "Agentverse Codegen", "args": {}}
-    codegen = await run_codegen(
-        CodegenRequest(job_id=build.job_id, build=build, spec=architect.spec, rag=rag)
-    )
+    try:
+        codegen = await run_codegen(
+            CodegenRequest(job_id=build.job_id, build=build, spec=architect.spec, rag=rag)
+        )
+    except Exception as exc:
+        yield {"type": "tool_end", "name": "Agentverse Codegen"}
+        yield {"type": "error", "message": f"Codegen failed: {exc}"}
+        return
     yield {"type": "tool_end", "name": "Agentverse Codegen"}
     yield {"type": "content", "content": f"{codegen.summary}\n"}
 
     yield {"type": "tool_start", "name": "Agentverse Validator", "args": {}}
-    validation = await run_validator(
-        ValidationRequest(job_id=build.job_id, project_id=build.project_id)
-    )
+    try:
+        validation = await run_validator(
+            ValidationRequest(job_id=build.job_id, project_id=build.project_id)
+        )
+    except Exception as exc:
+        yield {"type": "tool_end", "name": "Agentverse Validator"}
+        yield {"type": "error", "message": f"Validator failed: {exc}"}
+        return
     yield {"type": "tool_end", "name": "Agentverse Validator"}
     yield {"type": "content", "content": f"{validation.summary}\n"}
 
     yield {"type": "tool_start", "name": "Agentverse Packager", "args": {}}
-    package = await run_packager(
-        PackageRequest(job_id=build.job_id, project_id=build.project_id)
-    )
+    try:
+        package = await run_packager(
+            PackageRequest(job_id=build.job_id, project_id=build.project_id)
+        )
+    except Exception as exc:
+        yield {"type": "tool_end", "name": "Agentverse Packager"}
+        yield {"type": "error", "message": f"Packager failed: {exc}"}
+        return
     yield {"type": "tool_end", "name": "Agentverse Packager"}
     yield {"type": "content", "content": f"{package.summary}\n"}
     yield {"type": "extension_ready", "path": package.extension_path}

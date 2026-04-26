@@ -226,6 +226,17 @@ async def download_extension(project_id: str):
 # --- Extension Loading ---
 
 
+class SummarizeHtmlRequest(BaseModel):
+    html: str
+    max_chars: int = 5000
+    raw_length: int = 0
+    provider: str = "gemini"
+
+
+class SummarizeHtmlResponse(BaseModel):
+    summary: str
+
+
 class ClassifyItem(BaseModel):
     id: str
     text: str
@@ -239,6 +250,51 @@ class ClassifyRequest(BaseModel):
 
 class ClassifyResponse(BaseModel):
     matches: list[str]
+
+
+@app.post("/api/summarize-html", response_model=SummarizeHtmlResponse)
+async def summarize_html(req: SummarizeHtmlRequest):
+    """Summarize raw page HTML into a compact structural representation.
+
+    Called by the sidepanel when a user adds a whole-tab context chip and the
+    HTML is too large to embed verbatim.  Returns a condensed version that
+    preserves tag names, class names, and text so the codegen LLM can still
+    write accurate selectors.
+    """
+    if len(req.html.strip()) <= req.max_chars:
+        return SummarizeHtmlResponse(summary=req.html)
+
+    client = get_secondary_client(req.provider)
+    model = get_secondary_model(req.provider)
+
+    system_prompt = (
+        "You are an HTML structure summarizer. Given raw page HTML, extract and return "
+        "a compact representation that preserves: tag names, id attributes, class names, "
+        "data-* attributes, aria-label, and visible text content. Strip all src/href/style "
+        "attributes and script/style/svg/noscript blocks. Your output must be valid HTML "
+        f"and MUST be under {req.max_chars} characters. Return only the summarized HTML, "
+        "no prose."
+    )
+    user_prompt = f"Summarize this HTML (original length: {req.raw_length} chars):\n\n{req.html[:20000]}"
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_completion_tokens=2000,
+        )
+        summary = (response.choices[0].message.content or "").strip()
+        if summary:
+            return SummarizeHtmlResponse(summary=summary[:req.max_chars])
+    except Exception as exc:
+        logger.warning("summarize_html LLM call failed: %s", exc)
+
+    # Fallback: dumb truncation
+    return SummarizeHtmlResponse(summary=req.html[:req.max_chars])
 
 
 @app.post("/api/classify", response_model=ClassifyResponse)

@@ -1,0 +1,8 @@
+/* Apply a yellow background to the main document elements and YouTube's specific app containers */
+/* The !important flag ensures this style overrides most other background styles. */
+body.bf-yellow-background,
+html.bf-yellow-background,
+ytd-app.bf-yellow-background,
+ytd-page-manager.bf-yellow-background {
+  background-color: yellow !important;
+}

@@ -49,6 +49,16 @@ Critical rules:
    Most hide-this-element tasks need none. Use `host_permissions` ONLY when you \
    need to fetch the local classification backend (see rule 10).
 
+ELEMENT CONTEXT CHIPS:
+When the user provides an "The user explicitly selected the following elements" block, it
+contains the outerHTML of one specific instance of the element they want to target. Use it
+to identify the correct tag names, class patterns, and attributes — then write a GENERAL
+CSS selector that matches ALL similar elements on the page, not just that one instance.
+Never copy the exact chip HTML verbatim as a selector. Infer the repeating pattern
+(e.g. if the chip shows `<yt-img-shadow class="yt-img-shadow">` inside
+`<ytd-rich-item-renderer>`, the correct selector is
+`ytd-rich-item-renderer yt-img-shadow`, not a fragile nth-of-type chain).
+
 CONTENT CLASSIFICATION TASKS:
 10. If the user's request requires deciding whether each item on the page matches \
    some semantic criterion ("only show sports videos", "hide political content", \
@@ -79,6 +89,20 @@ CONTENT CLASSIFICATION TASKS:
     static CSS/JS — DO NOT call the classification backend. Classification is for \
     semantic content judgment, not for hiding known DOM regions.
 
+SHADOW DOM WARNING:
+12. NEVER target internal class names from YouTube's Web Component shadow trees. \
+    Classes like `ytSpecAvatarShapeImageOverlays`, `ytSpecAvatarShapeImage`, or \
+    any name prefixed with `ytSpec` live inside closed shadow roots — \
+    `document.querySelectorAll` CANNOT reach them. Always select the outermost \
+    custom-element tag or a stable light-DOM id/attribute instead.
+    Known stable YouTube channel-avatar selectors:
+    - Home feed card avatar: `ytd-rich-grid-media ytd-avatar-section`
+    - Home feed avatar container: `ytd-rich-grid-media #avatar-container`
+    - Search result author: `ytd-video-renderer #author-thumbnail`
+    - Watch page sidebar card: `ytd-compact-video-renderer ytd-avatar-section`
+    Same principle applies to ALL sites: never use classes that are nested inside \
+    a shadow root — use the outer tag, id, or data-* attribute on the light DOM.
+
 Output format: a single JSON object with exactly these keys:
 {
   "manifest": { ... full manifest.json object ... },
@@ -90,15 +114,23 @@ Output ONLY the JSON object, no prose, no markdown fences.
 """
 
 
-def _strip_chip_html(text: str) -> str:
-    """Strip Browser Forge chip HTML markers from a query."""
+def _extract_query_and_html(text: str) -> tuple[str, list[str]]:
+    """Extract the clean query and the raw HTML from Browser Forge context chips."""
+    html_chunks = []
+    
+    matches = re.finditer(r"<!--EVOLVE_CHIP_START:.*?-->(.*?)<!--EVOLVE_CHIP_END-->", text, flags=re.DOTALL)
+    for match in matches:
+        chunk = match.group(1).strip()
+        if chunk:
+            html_chunks.append(chunk)
+
     cleaned = re.sub(
-        r"<!--EVOLVE_CHIP_START:[^>]*-->.*?<!--EVOLVE_CHIP_END-->",
+        r"<!--EVOLVE_CHIP_START:.*?-->.*?<!--EVOLVE_CHIP_END-->",
         "",
         text,
         flags=re.DOTALL,
     )
-    return re.sub(r"\s+", " ", cleaned).strip()
+    return re.sub(r"\s+", " ", cleaned).strip(), html_chunks
 
 
 def _extract_json(content: str) -> dict[str, Any] | None:
@@ -133,11 +165,23 @@ async def _generate_with_llm(
         provider
     )["secondary_model"]
 
+    clean_query, html_chunks = _extract_query_and_html(query)
+    
+    html_context = ""
+    if html_chunks:
+        html_context = (
+            "The user explicitly selected the following elements on their screen. "
+            "Here is their exact HTML structure. Use these tags/classes to write perfectly accurate CSS selectors:\n"
+            + "\n---\n".join(html_chunks)
+            + "\n\n"
+        )
+
     user_prompt = (
-        f"User request: {_strip_chip_html(query)}\n\n"
+        f"User request: {clean_query}\n\n"
         f"Target URLs (use these as manifest content_scripts.matches): "
         f"{json.dumps(target_urls)}\n"
         f"Extension display name: {extension_name}\n\n"
+        f"{html_context}"
         + (
             "The previous output failed these checks. Fix every issue:\n"
             + "\n".join(f"- {issue}" for issue in quality_feedback)
@@ -179,7 +223,8 @@ async def _generate_with_llm(
     manifest.setdefault("manifest_version", 3)
     manifest.setdefault("version", "1.0")
     manifest.setdefault("name", extension_name[:45])
-    manifest["description"] = _strip_chip_html(str(manifest.get("description", extension_name)))[:120]
+    clean_query, _ = _extract_query_and_html(str(manifest.get("description", extension_name)))
+    manifest["description"] = clean_query[:120]
 
     scripts = manifest.get("content_scripts") or []
     if not scripts:
@@ -250,8 +295,8 @@ def _quality_issues(files: dict[str, str], target_urls: list[str]) -> list[str]:
 
     if len(content_js.strip()) < 80:
         issues.append("content_js is empty or too small; implement meaningful runtime logic.")
-    if len(content_css.strip()) < 20:
-        issues.append("content_css is empty or too small; include targeted CSS rules.")
+    if "content.css" in files and len(content_css.strip()) < 20:
+        issues.append("content_css is present but too small; add meaningful CSS rules.")
 
     try:
         manifest = json.loads(manifest_raw)
@@ -331,7 +376,7 @@ async def run_codegen(request: CodegenRequest) -> CodegenResult:
             "manifest_version": 3,
             "name": spec.name[:45],
             "version": "1.0",
-            "description": _strip_chip_html(spec.description)[:120],
+            "description": _extract_query_and_html(spec.description)[0][:120],
             "content_scripts": [
                 {
                     "matches": spec.target_urls,
