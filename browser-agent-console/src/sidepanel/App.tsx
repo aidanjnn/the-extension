@@ -201,7 +201,7 @@ function ExtensionInstallCard({ path, projectId }: { path: string; projectId?: s
         setState('success')
       } else {
         setState('error')
-        setErrorMsg(data.error || 'Automation failed.')
+        setErrorMsg(data.error || data.detail || 'Automation failed.')
       }
     } catch {
       setState('error')
@@ -2666,7 +2666,7 @@ export default function App() {
 
       // Extension ready for install
       if (data.type === 'extension_ready') {
-        parts.push({ type: 'extension_ready', path: data.path })
+        parts.push({ type: 'extension_ready', path: data.path, projectId: data.project_id })
         ensureAssistantMessage()
         updateAssistantMessage()
         return

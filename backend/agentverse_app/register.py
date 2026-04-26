@@ -18,13 +18,24 @@ from agentverse_app.config import settings
 
 AGENT_PROFILES = [
     {
-        "name": "Browser Orchestrator",
+        "name": "the extension orchestrator",
         "seed": settings.orchestrator_seed,
         "path": "/submit",
         "readme": (
-            "# Browser Orchestrator\n\n"
-            "Coordinates specialist agents that turn browser customization intent "
-            "into generated, validated Chrome extensions."
+            "# the extension orchestrator\n\n"
+            "Public surface of **the extension**, an ASI:One-discoverable platform "
+            "that turns plain-English browser customization requests into installable "
+            "Manifest V3 Chrome extensions. Send a prompt, get back a downloadable ZIP "
+            "with validation status and Chrome load instructions.\n\n"
+            "Try: `Build a Chrome extension that hides Instagram Reels links.` or "
+            "`Create a YouTube extension that removes Shorts.`\n\n"
+            "Under the hood, one registered orchestrator coordinates five specialist "
+            "roles (Architect, RAG, Codegen, Validator, Packager) running locally "
+            "behind ngrok tunnels. Responses are formatted as markdown so the "
+            "download link renders as a clickable artifact directly in ASI:One.\n\n"
+            "Future plan: split the specialist roles into their own Agentverse "
+            "profiles so agent-to-agent traces are visible to discovery.\n\n"
+            "Landing page: https://thewebisboring.design"
         ),
         "categories": ["chrome extension", "browser automation", "ai coding agent"],
     },
