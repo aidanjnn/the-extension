@@ -19,8 +19,9 @@ You are an expert Chrome extension engineer. You write Manifest V3 content-scrip
 extensions that perform precise DOM modifications on specific websites.
 
 You will receive a user request describing a browser customization. Your job is to \
-output a complete Chrome extension as JSON with three files: manifest.json, \
-content.js, and content.css.
+output a complete Chrome extension as JSON with exactly three files: manifest.json, \
+content.js, and content.css. content.js and content.css must both contain meaningful \
+implementation code; never leave either one empty.
 
 Critical rules:
 1. Use SITE-SPECIFIC selectors, not generic ones. Research the site's actual DOM \
@@ -33,20 +34,21 @@ Critical rules:
    `closest('section, article, nav, aside')` — you will hide the whole page.
 4. Use a MutationObserver for dynamic single-page apps; debounce with \
    requestAnimationFrame if needed.
-5. Use CSS `:has()` selectors where supported for clean hide rules.
+5. Use CSS `:has()` selectors where supported for clean hide rules, but pair CSS \
+   with JS so the extension also handles dynamic single-page app rerenders.
 6. Keep permissions minimal. content_scripts only — no service worker unless needed.
 7. The manifest description must be a plain string, no HTML.
 
-7. NEVER add `icons`, `web_accessible_resources`, `action`, `background`, or any \
+8. NEVER add `icons`, `web_accessible_resources`, `action`, `background`, or any \
    field that references files you are not generating. You only generate three \
    files: manifest.json, content.js, content.css. The manifest MUST NOT reference \
    any other file. No PNG icons, no popup HTML, no service worker.
-8. NEVER include `permissions` unless the content script genuinely needs them. \
+9. NEVER include `permissions` unless the content script genuinely needs them. \
    Most hide-this-element tasks need none. Use `host_permissions` ONLY when you \
-   need to fetch the local classification backend (see rule 9).
+   need to fetch the local classification backend (see rule 10).
 
 CONTENT CLASSIFICATION TASKS:
-9. If the user's request requires deciding whether each item on the page matches \
+10. If the user's request requires deciding whether each item on the page matches \
    some semantic criterion ("only show sports videos", "hide political content", \
    "filter for tutorials"), you MUST NOT use hardcoded keyword lists or regex. \
    Instead, generate code that calls the local classification backend at runtime:
@@ -71,7 +73,7 @@ CONTENT CLASSIFICATION TASKS:
    Hide via a CSS class added in content.css, e.g. `.bf-hidden { display: none !important; }`.
    Set the `filter_description` string to a clean restatement of the user's intent.
 
-10. For SIMPLE STRUCTURAL tasks (hide the Shorts shelf, remove the sidebar), use \
+11. For SIMPLE STRUCTURAL tasks (hide the Shorts shelf, remove the sidebar), use \
     static CSS/JS — DO NOT call the classification backend. Classification is for \
     semantic content judgment, not for hiding known DOM regions.
 
@@ -121,6 +123,7 @@ async def _generate_with_llm(
     target_urls: list[str],
     extension_name: str,
     provider: str,
+    quality_feedback: list[str] | None = None,
 ) -> dict[str, str] | None:
     """Call the LLM to produce manifest/content.js/content.css. Returns None on failure."""
     client = get_secondary_client(provider)
@@ -133,7 +136,14 @@ async def _generate_with_llm(
         f"Target URLs (use these as manifest content_scripts.matches): "
         f"{json.dumps(target_urls)}\n"
         f"Extension display name: {extension_name}\n\n"
-        "Produce the JSON object now."
+        + (
+            "The previous output failed these checks. Fix every issue:\n"
+            + "\n".join(f"- {issue}" for issue in quality_feedback)
+            + "\n\n"
+            if quality_feedback
+            else ""
+        )
+        + "Produce the JSON object now."
     )
 
     try:
@@ -230,9 +240,83 @@ def _sanitize_manifest(manifest: dict[str, Any], *, has_css: bool) -> None:
         ]
 
 
+def _quality_issues(files: dict[str, str], target_urls: list[str]) -> list[str]:
+    issues: list[str] = []
+    manifest_raw = files.get("manifest.json", "")
+    content_js = files.get("content.js", "")
+    content_css = files.get("content.css", "")
+
+    if len(content_js.strip()) < 80:
+        issues.append("content_js is empty or too small; implement meaningful runtime logic.")
+    if len(content_css.strip()) < 20:
+        issues.append("content_css is empty or too small; include targeted CSS rules.")
+
+    try:
+        manifest = json.loads(manifest_raw)
+    except json.JSONDecodeError:
+        return ["manifest.json is not valid JSON."]
+
+    scripts = manifest.get("content_scripts")
+    if not isinstance(scripts, list) or not scripts:
+        issues.append("manifest.content_scripts must include a content script entry.")
+        return issues
+
+    first_script = scripts[0] if isinstance(scripts[0], dict) else {}
+    matches = first_script.get("matches") or []
+    if sorted(matches) != sorted(target_urls):
+        issues.append("manifest content_scripts.matches must exactly use the supplied target URLs.")
+    if "content.js" not in (first_script.get("js") or []):
+        issues.append("manifest content script must reference content.js.")
+    if content_css.strip() and "content.css" not in (first_script.get("css") or []):
+        issues.append("manifest content script must reference content.css when CSS is generated.")
+
+    combined = f"{content_js}\n{content_css}".lower()
+    if re.search(r"\[class\*=['\"][^'\"]+['\"]\s+i?\]", combined):
+        issues.append("Do not use broad class substring selectors like [class*=...].")
+    if "document.body.style" in combined or "document.documentelement.style" in combined:
+        issues.append("Do not style or hide document.body/documentElement.")
+    if "display', 'none" in combined and "document.queryselectorall('*')" in combined:
+        issues.append("Do not iterate over every DOM node and hide matches.")
+    if "textcontent" in combined and "closest('section, article, nav, aside" in combined:
+        issues.append("Do not combine broad textContent matching with generic ancestor hiding.")
+    if "closest('section, article" in combined or 'closest("section, article' in combined:
+        issues.append("Avoid generic closest('section, article...') ancestors; use site-specific containers.")
+
+    return issues
+
+
+async def _generate_checked(
+    query: str,
+    target_urls: list[str],
+    extension_name: str,
+    provider: str,
+) -> dict[str, str] | None:
+    feedback: list[str] | None = None
+    for attempt in range(3):
+        files = await _generate_with_llm(
+            query=query,
+            target_urls=target_urls,
+            extension_name=extension_name,
+            provider=provider,
+            quality_feedback=feedback,
+        )
+        if files is None:
+            feedback = ["The response was missing valid manifest/content_js/content_css JSON."]
+            continue
+
+        issues = _quality_issues(files, target_urls)
+        if not issues:
+            return files
+
+        logger.warning("Codegen quality check failed on attempt %s: %s", attempt + 1, issues)
+        feedback = issues
+
+    return None
+
+
 async def run_codegen(request: CodegenRequest) -> CodegenResult:
     spec = request.spec
-    files = await _generate_with_llm(
+    files = await _generate_checked(
         query=spec.behavior,
         target_urls=spec.target_urls,
         extension_name=spec.name,

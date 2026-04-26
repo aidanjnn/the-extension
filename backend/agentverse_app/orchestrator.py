@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from uuid import uuid4
+
+from dotenv import load_dotenv
 
 from agentverse_app import backend_client
 from agentverse_app.architect import run_architect
@@ -52,7 +56,8 @@ def _step(agent_name: str, summary: str, payload: dict | None = None) -> AgentSt
 
 
 def _download_url(project_id: str) -> str | None:
-    base = settings.public_backend_base_url.rstrip("/")
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+    base = os.getenv("PUBLIC_BACKEND_BASE_URL", settings.public_backend_base_url).rstrip("/")
     if not base:
         return None
     return f"{base}/download/{project_id}.zip"

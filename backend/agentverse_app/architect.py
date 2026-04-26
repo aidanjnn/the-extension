@@ -21,6 +21,8 @@ def _infer_target_urls(query: str, active_tabs: list[dict]) -> list[str]:
     lowered = query.lower()
     if "instagram" in lowered:
         return ["https://www.instagram.com/*", "https://instagram.com/*"]
+    if any(term in lowered for term in ("messages", "message bar", "direct", "dm")):
+        return ["https://www.instagram.com/*", "https://instagram.com/*"]
     if "youtube" in lowered:
         return ["https://www.youtube.com/*"]
     if "twitter" in lowered or "x.com" in lowered:
