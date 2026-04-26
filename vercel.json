@@ -1,0 +1,5 @@
+{
+  "buildCommand": "cd browser-agent-console && npm install && npx vite build --config vite.landing.config.ts",
+  "outputDirectory": "browser-agent-console/dist-landing",
+  "framework": null
+}
