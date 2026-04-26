@@ -48,7 +48,7 @@ let overlayEl: HTMLDivElement | null = null
 let labelEl: HTMLDivElement | null = null
 let clickOverlayEl: HTMLDivElement | null = null
 let clickLabelEl: HTMLDivElement | null = null
-let isMetaKeyDown = false
+let isAltKeyDown = false  // tracks whether Option/Alt is held
 let isSidepanelOpen = false
 let sidepanelStateKnown = false
 
@@ -386,14 +386,14 @@ function applyClickedOverlay(el: Element | null) {
 }
 
 /**
- * Handles hover tracking while Cmd is held.
+ * Handles hover tracking while Option/Alt is held.
  */
 function handleMouseMove(event: MouseEvent) {
   if (!state.enabled) return
   if (!isSidepanelOpen && sidepanelStateKnown) return
-  if (!event.metaKey && !isMetaKeyDown) return
-  if (event.metaKey && !isMetaKeyDown) {
-    isMetaKeyDown = true
+  if (!event.altKey && !isAltKeyDown) return
+  if (event.altKey && !isAltKeyDown) {
+    isAltKeyDown = true
   }
   const el = document.elementFromPoint(event.clientX, event.clientY)
   if (!el || isExtensionUi(el)) return
@@ -468,28 +468,28 @@ export async function startHoverHighlighter() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       applyHighlight(null)
-      isMetaKeyDown = false
+      isAltKeyDown = false
       void clearAllClickedHighlights()
       return
     }
 
-    if (event.metaKey) {
-      isMetaKeyDown = true
+    if (event.altKey) {
+      isAltKeyDown = true
     }
   }, true)
 
   document.addEventListener('keyup', (event) => {
-    if (event.key === 'Meta' || !event.metaKey) {
-      if (isMetaKeyDown) {
-        isMetaKeyDown = false
+    if (event.key === 'Alt' || !event.altKey) {
+      if (isAltKeyDown) {
+        isAltKeyDown = false
         applyHighlight(null)
       }
     }
   }, true)
 
   window.addEventListener('blur', () => {
-    if (isMetaKeyDown) {
-      isMetaKeyDown = false
+    if (isAltKeyDown) {
+      isAltKeyDown = false
       applyHighlight(null)
     }
   })
@@ -518,9 +518,9 @@ export async function startHoverHighlighter() {
 
   document.addEventListener('click', (event) => {
     if (!isSidepanelOpen && sidepanelStateKnown) return
-    if (!event.metaKey && !isMetaKeyDown) return
-    if (event.metaKey && !isMetaKeyDown) {
-      isMetaKeyDown = true
+    if (!event.altKey && !isAltKeyDown) return
+    if (event.altKey && !isAltKeyDown) {
+      isAltKeyDown = true
     }
     event.preventDefault()
     event.stopImmediatePropagation()

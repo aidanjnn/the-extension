@@ -276,8 +276,31 @@ export default function App() {
   const [mentionPosition, setMentionPosition] = useState<{ top: number; left: number } | null>(null)
   const [tabMatches, setTabMatches] = useState<TabMatch[]>([])
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
+  const [currentActiveTab, setCurrentActiveTab] = useState<chrome.tabs.Tab | null>(null)
 
   // Sidepanel open/close state is derived from chrome.sidePanel.onStateChanged in the background.
+
+  // Track the currently active tab for the UI indicator and payload sync
+  useEffect(() => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) setCurrentActiveTab(tabs[0])
+    })
+
+    const handleTabActive = (activeInfo: { tabId: number }) => {
+      chrome.tabs.get(activeInfo.tabId, (tab) => setCurrentActiveTab(tab))
+    }
+
+    const handleTabUpdate = (_tabId: number, _changeInfo: unknown, tab: chrome.tabs.Tab) => {
+      if (tab.active) setCurrentActiveTab(tab)
+    }
+
+    chrome.tabs.onActivated.addListener(handleTabActive)
+    chrome.tabs.onUpdated.addListener(handleTabUpdate)
+    return () => {
+      chrome.tabs.onActivated.removeListener(handleTabActive)
+      chrome.tabs.onUpdated.removeListener(handleTabUpdate)
+    }
+  }, [])
 
   // Load projects on mount
   useEffect(() => {
@@ -1739,7 +1762,7 @@ export default function App() {
           id: t.id as number,
           url: t.url ?? '',
           title: t.title ?? '',
-          active: t.active ?? false,
+          active: currentActiveTab?.id === t.id ? true : (t.active ?? false),
         }))
       // Cache tab info for resolving tool labels later
       const map = new Map<number, TabInfo>()
@@ -2347,6 +2370,22 @@ export default function App() {
 
         {/* Input */}
         <form onSubmit={handleSubmit} className="chat-input">
+          {currentActiveTab && (
+            <div className="active-tab-context">
+              {currentActiveTab.favIconUrl && (
+                <img
+                  src={currentActiveTab.favIconUrl}
+                  alt="favicon"
+                  className="active-tab-favicon"
+                />
+              )}
+              <span className="active-tab-url">
+                {(() => {
+                  try { return new URL(currentActiveTab.url || '').hostname } catch { return currentActiveTab.url || '' }
+                })()}
+              </span>
+            </div>
+          )}
           <div className="chat-input-main">
             <div className="chat-input-field" ref={inputFieldRef}>
               <div

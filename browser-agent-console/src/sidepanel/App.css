@@ -1460,3 +1460,33 @@
     background: rgba(0, 0, 0, 0.03);
   }
 }
+
+/* Active tab context indicator */
+.active-tab-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 4px 10px;
+  border-radius: 12px;
+  width: fit-content;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: #a1a1aa;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.active-tab-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.active-tab-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
