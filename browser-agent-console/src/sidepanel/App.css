@@ -400,6 +400,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  min-width: 226px;
   padding: 3px;
   border: 1px solid var(--bf-border);
   border-radius: var(--bf-radius-pill);
@@ -408,6 +409,7 @@ button {
 }
 
 .app-mode-option {
+  flex: 1;
   border: 0;
   border-radius: var(--bf-radius-pill);
   padding: 5px 9px;

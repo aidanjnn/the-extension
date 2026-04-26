@@ -548,7 +548,7 @@ export async function startHoverHighlighter() {
   }
 
   try {
-    if (isSidepanelOpen) {
+    if (isSidepanelOpen && state.enabled) {
       await restoreClickedHighlights()
     }
   } catch {
@@ -557,10 +557,12 @@ export async function startHoverHighlighter() {
 
   window.addEventListener('mousemove', handleMouseMove, { passive: true })
   window.addEventListener('scroll', () => {
+    if (!state.enabled) return
     applyHighlight(currentEl)
     applyClickedOverlay(pinnedEl)
   }, { passive: true })
   window.addEventListener('resize', () => {
+    if (!state.enabled) return
     applyHighlight(currentEl)
     applyClickedOverlay(pinnedEl)
   })
@@ -569,11 +571,11 @@ export async function startHoverHighlighter() {
     if (event.key === 'Escape') {
       applyHighlight(null)
       isMetaKeyDown = false
-      void clearAllClickedHighlights()
+      if (state.enabled) void clearAllClickedHighlights()
       return
     }
 
-    if (event.metaKey) {
+    if (state.enabled && event.metaKey) {
       isMetaKeyDown = true
     }
   }, true)
@@ -599,10 +601,10 @@ export async function startHoverHighlighter() {
     ensureStyle()
     ensureOverlay()
     await syncSidepanelState()
-    if (isSidepanelOpen) {
+    if (isSidepanelOpen && state.enabled) {
       await restoreClickedHighlights()
     }
-    if (pinnedSelector) {
+    if (state.enabled && pinnedSelector) {
       const el = document.querySelector(pinnedSelector)
       if (el) applyClickedOverlay(el)
     }
@@ -617,6 +619,7 @@ export async function startHoverHighlighter() {
   })
 
   document.addEventListener('click', (event) => {
+    if (!state.enabled) return
     if (!isSidepanelOpen && sidepanelStateKnown) return
     if (!event.metaKey && !isMetaKeyDown) return
     if (event.metaKey && !isMetaKeyDown) {
@@ -707,9 +710,11 @@ export function setHoverHighlighterEnabled(enabled: boolean) {
   if (state.enabled === enabled) return
   state = { ...state, enabled }
   if (!enabled) {
+    isMetaKeyDown = false
     applyHighlight(null)
     hideClickedHighlights()
     hideClickedOverlay()
+    void clearAllClickedHighlights()
   }
   scheduleSave()
 }

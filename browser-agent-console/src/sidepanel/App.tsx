@@ -125,7 +125,6 @@ interface Message {
   thinkingMs?: number
 }
 
-type SidebarView = 'projects' | 'conversations'
 type AppMode = 'create' | 'dom'
 
 type DomExportResult = {
@@ -582,9 +581,7 @@ function injectFloatingOverlay(iframeUrl: string) {
 // Sidepanel chat UI with inline, coalesced selection chips inside a contenteditable editor.
 export default function App() {
   // Project state
-  const [projects, setProjects] = useState<Project[]>([])
   const [activeProject, setActiveProject] = useState<Project | null>(null)
-  const [newProjectName, setNewProjectName] = useState('')
   const [creatingProject, setCreatingProject] = useState(false)
 
   // Conversation state
@@ -607,16 +604,14 @@ export default function App() {
   const [rules, setRules] = useState<Rule[]>([])
   const [rulesOpen, setRulesOpen] = useState(false)
 
-  // Provider state
-  const [provider, setProvider] = useState<'gemini' | 'openai' | 'nvidia'>('gemini')
   const [appMode, setAppMode] = useState<AppMode>('create')
   const [domEdits, setDomEdits] = useState<DomEditOperation[]>([])
   const [domExportResult, setDomExportResult] = useState<DomExportResult | null>(null)
   const [domExporting, setDomExporting] = useState(false)
+  const didEnsureDefaultProjectRef = useRef(false)
 
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [sidebarView, setSidebarView] = useState<SidebarView>('projects')
 
   // Predictive suggestions state
   const [suggestions, setSuggestions] = useState<string[]>([])
@@ -756,6 +751,15 @@ export default function App() {
   useEffect(() => {
     fetchProjects()
   }, [])
+
+  useEffect(() => {
+    if (appMode === 'create') {
+      void chrome.runtime.sendMessage({
+        type: MESSAGE_TYPES.setDomEditMode,
+        enabled: false,
+      }).catch(() => {})
+    }
+  }, [appMode])
 
   // Track active tab so the input can show a page-context chip
   useEffect(() => {
@@ -2132,55 +2136,36 @@ export default function App() {
       const res = await fetch(`${API_URL}/projects`)
       if (res.ok) {
         const data: Project[] = await res.json()
-        setProjects(data)
+        if (!activeProject && data.length > 0) {
+          selectProject(data[0])
+          return
+        }
+        if (!activeProject && data.length === 0 && !didEnsureDefaultProjectRef.current) {
+          didEnsureDefaultProjectRef.current = true
+          await createDefaultProject()
+        }
       }
     } catch {
       // Silently fail
     }
   }
 
-  const handleCreateProject = async () => {
-    const name = newProjectName.trim()
-    if (!name) return
-
+  const createDefaultProject = async () => {
     setCreatingProject(true)
     try {
       const res = await fetch(`${API_URL}/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name: 'Browser Forge' }),
       })
       if (res.ok) {
         const project: Project = await res.json()
-        setNewProjectName('')
-        setProjects((prev) => [project, ...prev])
         selectProject(project)
       }
     } catch {
-      setError('Failed to create project')
+      setError('Failed to initialize chat')
     } finally {
       setCreatingProject(false)
-    }
-  }
-
-  const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!confirm('Delete this project and all its conversations?')) return
-
-    try {
-      const res = await fetch(`${API_URL}/projects/${projectId}`, { method: 'DELETE' })
-      if (res.ok) {
-        setProjects((prev) => prev.filter((p) => p.id !== projectId))
-        if (activeProject?.id === projectId) {
-          setActiveProject(null)
-          setConversations([])
-          setActiveConversationId(null)
-          setMessages([])
-          setSidebarView('projects')
-        }
-      }
-    } catch {
-      setError('Failed to delete project')
     }
   }
 
@@ -2190,7 +2175,6 @@ export default function App() {
     setMessages([])
     setError('')
     setRulesOpen(false)
-    setSidebarView('conversations')
     fetchConversations(project.id)
     fetchRules(project.id)
   }
@@ -2722,7 +2706,7 @@ export default function App() {
         query: finalQuery,
         conversation_id: activeConversationId,
         active_tabs: activeTabs,
-        provider,
+        provider: 'gemini',
       }),
     )
   }
@@ -2884,10 +2868,6 @@ export default function App() {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
   }
 
-  const goBackToProjects = () => {
-    setSidebarView('projects')
-  }
-
   const targetUrlPatternsForDomEdits = () => {
     const origins = new Set<string>()
     domEdits.forEach((edit) => {
@@ -2949,105 +2929,36 @@ export default function App() {
 
       {/* Sidebar */}
       <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        {sidebarView === 'projects' ? (
-          <>
-            <div className="sidebar-header">
-              <h2>Projects</h2>
-              <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Close">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-            <div className="project-create">
-              <input
-                type="text"
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
-                placeholder="New project name..."
-                disabled={creatingProject}
-              />
-              <button
-                className="new-chat-btn"
-                onClick={handleCreateProject}
-                disabled={creatingProject || !newProjectName.trim()}
-                title="Create project"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-            </div>
-            <div className="conversation-list">
-              {projects.length === 0 && (
-                <div className="empty-conversations">No projects yet</div>
-              )}
-              {projects.map((project) => (
-                <button
-                  key={project.id}
-                  className={`conversation-item ${project.id === activeProject?.id ? 'active' : ''}`}
-                  onClick={() => selectProject(project)}
-                >
-                  <span className="project-name">{project.name}</span>
-                  <div className="project-item-actions">
-                    <span className="conversation-time">{formatTime(project.created_at)}</span>
-                    <button
-                      className="delete-btn"
-                      onClick={(e) => handleDeleteProject(project.id, e)}
-                      title="Delete project"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      </svg>
-                    </button>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="sidebar-header">
-              <button className="back-btn" onClick={goBackToProjects} title="Back to projects">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="15 18 9 12 15 6" />
-                </svg>
-              </button>
-              <h2>{activeProject?.name ?? 'Conversations'}</h2>
-              <button className="new-chat-btn" onClick={startNewConversation} title="New chat">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-              <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Close">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-            <div className="conversation-list">
-              {conversations.length === 0 && (
-                <div className="empty-conversations">No conversations yet</div>
-              )}
-              {conversations.map((conv) => (
-                <button
-                  key={conv.id}
-                  className={`conversation-item ${conv.id === activeConversationId ? 'active' : ''}`}
-                  onClick={() => loadConversation(conv.id)}
-                >
-                  <span className="conversation-id">{conv.title || `${conv.id.slice(0, 8)}...`}</span>
-                  <span className="conversation-time">{formatTime(conv.created_at)}</span>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+        <div className="sidebar-header">
+          <h2>Past chats</h2>
+          <button className="new-chat-btn" onClick={startNewConversation} title="New chat">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <div className="conversation-list">
+          {conversations.length === 0 && (
+            <div className="empty-conversations">{creatingProject ? 'Starting chat…' : 'No conversations yet'}</div>
+          )}
+          {conversations.map((conv) => (
+            <button
+              key={conv.id}
+              className={`conversation-item ${conv.id === activeConversationId ? 'active' : ''}`}
+              onClick={() => loadConversation(conv.id)}
+            >
+              <span className="conversation-id">{conv.title || `${conv.id.slice(0, 8)}...`}</span>
+              <span className="conversation-time">{formatTime(conv.created_at)}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Main chat area */}
@@ -3068,13 +2979,13 @@ export default function App() {
             )
           }}
         >
-          <button className="menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)} title="Toggle sidebar">
+          <button className="menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)} title="Past chats">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" />
               <path d="m17 3 4 4-9.5 9.5L7 17l.5-4.5L17 3z" />
             </svg>
           </button>
-          <h1>{appMode === 'dom' ? 'Edit DOM' : activeProject ? activeProject.name : 'Browser Forge'}</h1>
+          <h1>Browser Forge</h1>
           <div className="header-actions">
             <div className="app-mode-toggle" role="tablist" aria-label="Browser Forge mode">
               <button
@@ -3096,18 +3007,6 @@ export default function App() {
                 Edit DOM
               </button>
             </div>
-            {appMode === 'create' && (
-              <select
-                className="provider-select"
-                value={provider}
-                onChange={(e) => setProvider(e.target.value as 'gemini' | 'openai' | 'nvidia')}
-                title="LLM provider"
-              >
-                <option value="gemini">Gemini</option>
-                <option value="openai">OpenAI</option>
-                <option value="nvidia">NVIDIA</option>
-              </select>
-            )}
             {activeProject && (
               <>
                 <button
@@ -3306,8 +3205,8 @@ export default function App() {
                   "Hide YouTube Shorts so I can focus."
                 </div>
               </div>
-              <div className="empty-canvas-title">Build extensions from this page</div>
-              <div className="empty-canvas-hint">Open a project from the menu, then describe a change.</div>
+              <div className="empty-canvas-title">Starting Browser Forge</div>
+              <div className="empty-canvas-hint">Preparing your chat workspace…</div>
             </div>
           )}
           {appMode === 'create' && activeProject && messages.length === 0 && !loading && (
@@ -3569,7 +3468,7 @@ export default function App() {
                     ? 'Select elements with ⌘ + click, then ask for an edit...'
                     : activeProject
                       ? 'Ask a question about this page...'
-                      : 'Select a project first...'
+                      : 'Preparing chat...'
                 }
                 onInput={handleEditorInput}
                 onClick={handleEditorClick}
