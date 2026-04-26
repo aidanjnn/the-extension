@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import shutil
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
@@ -242,6 +243,33 @@ class ClassifyResponse(BaseModel):
     matches: list[str]
 
 
+class DomEditOperationRequest(BaseModel):
+    id: str
+    kind: str
+    selector: str
+    url: str
+    label: str | None = None
+    order: int
+    createdAt: int
+    styles: dict[str, str] | None = None
+    text: str | None = None
+    description: str
+
+
+class DomEditExportRequest(BaseModel):
+    name: str = "Browser Forge DOM edits"
+    target_urls: list[str] = []
+    operations: list[DomEditOperationRequest]
+
+
+class DomEditExportResponse(BaseModel):
+    project_id: str
+    extension_path: str
+    zip_path: str
+    download_url: str
+    load_instructions: str
+
+
 @app.post("/api/classify", response_model=ClassifyResponse)
 async def classify(req: ClassifyRequest):
     """Classify a batch of items against a user-supplied filter description.
@@ -307,6 +335,172 @@ async def classify(req: ClassifyRequest):
     valid_ids = {item.id for item in items}
     return ClassifyResponse(
         matches=[str(m) for m in matches_raw if str(m) in valid_ids]
+    )
+
+
+SAFE_DOM_STYLE_PROPERTIES = {
+    "display",
+    "opacity",
+    "filter",
+    "transform",
+    "transform-origin",
+    "outline",
+    "outline-offset",
+    "box-shadow",
+    "background",
+    "background-color",
+    "color",
+    "border",
+    "border-radius",
+    "overflow",
+    "min-height",
+    "max-height",
+    "width",
+    "min-width",
+    "max-width",
+    "margin",
+    "margin-left",
+    "margin-right",
+    "margin-top",
+    "margin-bottom",
+    "padding",
+}
+
+
+def _safe_dom_style_value(value: str) -> str:
+    return re.sub(r"[{};]", "", str(value)).strip()[:160]
+
+
+def _target_urls_from_dom_request(req: DomEditExportRequest) -> list[str]:
+    if req.target_urls:
+        return req.target_urls
+    origins: list[str] = []
+    for op in req.operations:
+        match = re.match(r"https?://[^/]+", op.url)
+        if match and match.group(0) not in origins:
+            origins.append(match.group(0))
+    return [f"{origin}/*" for origin in origins] or ["<all_urls>"]
+
+
+def _build_dom_edit_extension_files(req: DomEditExportRequest) -> dict[str, str]:
+    operations: list[dict] = []
+    for op in sorted(req.operations, key=lambda item: item.order):
+        styles = {
+            key: _safe_dom_style_value(value)
+            for key, value in (op.styles or {}).items()
+            if key in SAFE_DOM_STYLE_PROPERTIES and _safe_dom_style_value(value)
+        }
+        operations.append(
+            {
+                "id": op.id,
+                "kind": op.kind,
+                "selector": op.selector,
+                "url": op.url,
+                "label": op.label,
+                "order": op.order,
+                "styles": styles,
+                "text": op.text[:500] if op.text else None,
+                "description": op.description,
+            }
+        )
+
+    name = _safe_filename(req.name, "Browser Forge DOM Edits").replace("_", " ")[:45]
+    manifest = {
+        "manifest_version": 3,
+        "name": name,
+        "version": "1.0",
+        "description": "Persistent DOM edits exported from Browser Forge.",
+        "content_scripts": [
+            {
+                "matches": _target_urls_from_dom_request(req),
+                "js": ["content.js"],
+                "css": ["content.css"],
+                "run_at": "document_idle",
+            }
+        ],
+    }
+    content_js = f"""
+const OPERATIONS = {json.dumps(operations, indent=2)};
+let rafToken = 0;
+
+function applyOperation(operation) {{
+  if (!operation || !operation.selector) return;
+  let nodes = [];
+  try {{
+    nodes = Array.from(document.querySelectorAll(operation.selector));
+  }} catch {{
+    return;
+  }}
+  for (const node of nodes) {{
+    if (!(node instanceof HTMLElement)) continue;
+    if (operation.kind === 'hide') {{
+      node.style.setProperty('display', 'none', 'important');
+    }}
+    if (operation.kind === 'text' && typeof operation.text === 'string') {{
+      node.textContent = operation.text;
+    }}
+    const styles = operation.styles || {{}};
+    for (const [property, value] of Object.entries(styles)) {{
+      if (!value) continue;
+      node.style.setProperty(property, String(value), 'important');
+    }}
+  }}
+}}
+
+function applyAll() {{
+  for (const operation of OPERATIONS) {{
+    applyOperation(operation);
+  }}
+}}
+
+function scheduleApply() {{
+  if (rafToken) cancelAnimationFrame(rafToken);
+  rafToken = requestAnimationFrame(() => {{
+    rafToken = 0;
+    applyAll();
+  }});
+}}
+
+if (document.readyState === 'loading') {{
+  document.addEventListener('DOMContentLoaded', applyAll, {{ once: true }});
+}} else {{
+  applyAll();
+}}
+
+const root = document.documentElement || document.body;
+if (root) {{
+  new MutationObserver(scheduleApply).observe(root, {{ childList: true, subtree: true }});
+}}
+window.addEventListener('popstate', scheduleApply);
+window.addEventListener('hashchange', scheduleApply);
+""".strip()
+    content_css = """
+/* Browser Forge DOM edits are applied inline by content.js so they win over page styles. */
+""".strip()
+    return {
+        "manifest.json": json.dumps(manifest, indent=2),
+        "content.js": content_js,
+        "content.css": content_css,
+    }
+
+
+@app.post("/api/dom-edits/export", response_model=DomEditExportResponse)
+async def export_dom_edits(req: DomEditExportRequest):
+    if not req.operations:
+        raise HTTPException(status_code=400, detail="No DOM edits to export")
+    project_id = f"dom_{uuid.uuid4().hex}"
+    files = _build_dom_edit_extension_files(req)
+    reset_project_workspace(project_id)
+    write_project_files(project_id, files)
+    packaged = package_project_extension(project_id)
+    base_url = agentverse_settings.public_backend_base_url or "http://localhost:8000"
+    download_url = f"{base_url.rstrip('/')}/download/{project_id}.zip"
+    return DomEditExportResponse(
+        project_id=project_id,
+        extension_path=str(packaged["extension_path"]),
+        zip_path=str(packaged["zip_path"]),
+        download_url=download_url,
+        load_instructions=str(packaged["load_instructions"]),
     )
 
 
