@@ -65,8 +65,8 @@ function ensureStyle() {
     #${OVERLAY_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      border: 2px solid #ff6b00 !important;
-      box-shadow: 0 0 0 1px #ff6b00, 0 0 0 2px rgba(255, 107, 0, 0.35) !important;
+      border: 2px solid #a78bfa !important;
+      box-shadow: 0 0 0 1px #a78bfa, 0 0 0 2px rgba(167, 139, 250, 0.35) !important;
       background: transparent;
       box-sizing: border-box;
       pointer-events: none !important;
@@ -77,7 +77,7 @@ function ensureStyle() {
     #${LABEL_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      background: #ff6b00 !important;
+      background: #a78bfa !important;
       color: #111 !important;
       font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       border-radius: 4px !important;
@@ -89,8 +89,8 @@ function ensureStyle() {
     #${CLICK_OVERLAY_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      border: 2px solid #ff6b00 !important;
-      box-shadow: 0 0 0 1px #ff6b00, 0 0 0 2px rgba(255, 107, 0, 0.35) !important;
+      border: 2px solid #a78bfa !important;
+      box-shadow: 0 0 0 1px #a78bfa, 0 0 0 2px rgba(167, 139, 250, 0.35) !important;
       background: transparent;
       box-sizing: border-box;
       pointer-events: none !important;
@@ -101,7 +101,7 @@ function ensureStyle() {
     #${CLICK_LABEL_ID} {
       position: fixed;
       z-index: 2147483647 !important;
-      background: #ff6b00 !important;
+      background: #a78bfa !important;
       color: #111 !important;
       font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       border-radius: 4px !important;
@@ -111,9 +111,9 @@ function ensureStyle() {
     }
 
     .${CLICKED_CLASS} {
-      outline: 2px solid #ff6b00 !important;
+      outline: 2px solid #a78bfa !important;
       outline-offset: 2px !important;
-      background-color: rgba(255, 107, 0, 0.12) !important;
+      background-color: rgba(167, 139, 250, 0.12) !important;
       position: relative !important;
       z-index: 2147483646 !important;
     }

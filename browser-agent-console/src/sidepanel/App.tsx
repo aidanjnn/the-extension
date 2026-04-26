@@ -13,6 +13,74 @@ const CHIP_HTML_END = '<!--EVOLVE_CHIP_END-->'
 const MAX_CONTEXT_HTML_CHARS = 5000
 const SUMMARIZE_TRIGGER_CHARS = 5000
 
+// Predictive search suggestion templates
+const SUGGESTION_TEMPLATES = [
+  'create a youtube shorts remover extension',
+  'create a youtube shorts remover extension for chrome',
+  'create a youtube shorts remover extension that blocks shorts',
+  'create a dark mode extension for all websites',
+  'create a dark mode toggle extension',
+  'create an ad blocker extension',
+  'create a tab manager extension',
+  'create a bookmark organizer extension',
+  'create a screenshot capture extension',
+  'create a password generator extension',
+  'create a page translator extension',
+  'create a reading mode extension',
+  'create a pomodoro timer extension',
+  'create a color picker extension',
+  'create a note taking extension',
+  'create a price tracker extension',
+  'create a text highlighter extension',
+  'create a font changer extension',
+  'create a page zoom extension',
+  'create a new tab customizer extension',
+  'hide all ads on this page',
+  'hide the sidebar on this page',
+  'hide the comments section',
+  'hide the navigation bar',
+  'hide all images on this page',
+  'hide all videos on this page',
+  'filter content by keyword',
+  'filter out sponsored posts',
+  'remove cookie consent banners',
+  'remove popup overlays',
+  'remove social media share buttons',
+  'restyle this page with dark colors',
+  'restyle the font to be larger',
+  'restyle the background to be darker',
+  'change the font on this page',
+  'change the background color',
+  'make this page more readable',
+  'block distracting elements',
+  'auto scroll this page',
+  'extract all links from this page',
+  'extract all images from this page',
+  'save this page as PDF',
+  'highlight all links on this page',
+  'add a word counter to this page',
+]
+
+function getSuggestions(input: string, max = 5): string[] {
+  const q = input.toLowerCase().trim()
+  if (q.length < 3) return []
+  const matches: string[] = []
+  // Exact prefix matches first
+  for (const t of SUGGESTION_TEMPLATES) {
+    if (t.startsWith(q) && t !== q) matches.push(t)
+    if (matches.length >= max) return matches
+  }
+  // Then fuzzy word-start matches
+  const words = q.split(/\s+/)
+  for (const t of SUGGESTION_TEMPLATES) {
+    if (matches.includes(t)) continue
+    const allMatch = words.every((w) => t.includes(w))
+    if (allMatch && t !== q) matches.push(t)
+    if (matches.length >= max) return matches
+  }
+  return matches
+}
+
 interface Project {
   id: string
   name: string
@@ -52,6 +120,8 @@ interface Message {
   created_at: string
   parts?: MessagePart[]
   displayParts?: DisplayPart[]
+  startedAt?: number
+  thinkingMs?: number
 }
 
 type SidebarView = 'projects' | 'conversations'
@@ -220,6 +290,285 @@ function ExtensionInstallCard({ path, projectId }: { path: string; projectId?: s
   )
 }
 
+// Dia-style "Thought for Xs" collapsible block that wraps the agent's
+// tool-call trail. Defaults to expanded while streaming, auto-collapses a
+// moment after streaming finishes (user can re-expand).
+type ToolPart = { type: 'tool'; name: string; label: string; status: 'running' | 'done'; favIconUrl?: string }
+
+function ThinkingBlock({
+  toolParts,
+  isStreaming,
+  durationMs,
+}: {
+  toolParts: ToolPart[]
+  isStreaming: boolean
+  durationMs?: number
+}) {
+  const [open, setOpen] = useState(true)
+  const wasStreaming = useRef(isStreaming)
+  useEffect(() => {
+    if (wasStreaming.current && !isStreaming) {
+      const t = window.setTimeout(() => setOpen(false), 1400)
+      wasStreaming.current = isStreaming
+      return () => window.clearTimeout(t)
+    }
+    wasStreaming.current = isStreaming
+  }, [isStreaming])
+
+  const seconds = durationMs != null ? Math.max(1, Math.round(durationMs / 1000)) : null
+  const headerLabel = isStreaming
+    ? 'Thinking…'
+    : seconds != null
+      ? `Thought for ${seconds} second${seconds === 1 ? '' : 's'}`
+      : 'Thought'
+
+  return (
+    <div className={`thinking-block ${open ? 'open' : 'collapsed'} ${isStreaming ? 'streaming' : ''}`}>
+      <button
+        type="button"
+        className="thinking-block-header"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="thinking-block-label">{headerLabel}</span>
+        <svg
+          className="thinking-block-chevron"
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      <div className="thinking-block-body">
+        {toolParts.map((part, idx) => (
+          <div key={idx} className={`tool-call ${part.status} bf-part-in`}>
+            <span className="tool-call-icon">
+              {part.status === 'running' ? (
+                <svg className="tool-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              )}
+            </span>
+            {part.favIconUrl && (
+              <img src={part.favIconUrl} alt="" className="tool-call-favicon" width="14" height="14" />
+            )}
+            <span className="tool-call-label">{part.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Function injected into the active web page to render Browser Forge as a
+// draggable floating overlay (Dia-style: no browser chrome, sits above page).
+// Must be self-contained — runs in page context via chrome.scripting.executeScript.
+function injectFloatingOverlay(iframeUrl: string) {
+  const HOST_ID = 'browser-forge-floating-host'
+  const existing = document.getElementById(HOST_ID)
+  if (existing) {
+    existing.remove()
+  }
+
+  const host = document.createElement('div')
+  host.id = HOST_ID
+  Object.assign(host.style, {
+    position: 'fixed',
+    top: '80px',
+    right: '40px',
+    width: '400px',
+    height: 'min(720px, calc(100vh - 120px))',
+    zIndex: '2147483647',
+    boxShadow: '0 16px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.3)',
+    borderRadius: '18px',
+    overflow: 'hidden',
+    background: '#0d0d0e',
+    opacity: '0',
+    transform: 'translateY(8px) scale(0.985)',
+    transition: 'opacity 220ms ease, transform 220ms cubic-bezier(.2,0,.1,1)',
+    border: '1px solid rgba(255,255,255,0.08)',
+  } as Partial<CSSStyleDeclaration>)
+
+  // Thin top drag-handle strip (hover hint via CSS pseudo). Iframe content
+  // can also initiate drag via postMessage.
+  const dragHandle = document.createElement('div')
+  Object.assign(dragHandle.style, {
+    position: 'absolute',
+    top: '0', left: '0', right: '0',
+    height: '8px',
+    cursor: 'move',
+    zIndex: '2',
+    background: 'transparent',
+  } as Partial<CSSStyleDeclaration>)
+
+  const iframe = document.createElement('iframe')
+  iframe.src = iframeUrl
+  iframe.allow = 'clipboard-read; clipboard-write'
+  Object.assign(iframe.style, {
+    width: '100%',
+    height: '100%',
+    border: 'none',
+    background: 'transparent',
+    display: 'block',
+  } as Partial<CSSStyleDeclaration>)
+
+  // --- Resize handles: right edge, bottom edge, bottom-right corner ---
+  const resizeRight = document.createElement('div')
+  Object.assign(resizeRight.style, {
+    position: 'absolute',
+    top: '10px', bottom: '14px', right: '-2px',
+    width: '8px',
+    cursor: 'ew-resize',
+    zIndex: '3',
+  } as Partial<CSSStyleDeclaration>)
+
+  const resizeBottom = document.createElement('div')
+  Object.assign(resizeBottom.style, {
+    position: 'absolute',
+    left: '10px', right: '14px', bottom: '-2px',
+    height: '8px',
+    cursor: 'ns-resize',
+    zIndex: '3',
+  } as Partial<CSSStyleDeclaration>)
+
+  const resizeCorner = document.createElement('div')
+  Object.assign(resizeCorner.style, {
+    position: 'absolute',
+    bottom: '0', right: '0',
+    width: '18px', height: '18px',
+    cursor: 'nwse-resize',
+    zIndex: '4',
+  } as Partial<CSSStyleDeclaration>)
+  // Subtle diagonal grip indicator on the corner.
+  resizeCorner.innerHTML =
+    '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="rgba(255,255,255,0.32)" stroke-width="1.3" stroke-linecap="round" style="position:absolute;bottom:2px;right:2px;pointer-events:none;">' +
+    '<line x1="3" y1="12" x2="12" y2="3" />' +
+    '<line x1="6.5" y1="12" x2="12" y2="6.5" />' +
+    '<line x1="9.5" y1="12" x2="12" y2="9.5" />' +
+    '</svg>'
+
+  host.append(dragHandle, iframe, resizeRight, resizeBottom, resizeCorner)
+  document.documentElement.appendChild(host)
+
+  // Animate in.
+  requestAnimationFrame(() => {
+    host.style.opacity = '1'
+    host.style.transform = 'translateY(0) scale(1)'
+  })
+
+  // --- Drag + resize handling ---
+  let dragStart: { hostX: number; hostY: number; mouseX: number; mouseY: number } | null = null
+  type ResizeDir = 'right' | 'bottom' | 'corner'
+  let resizeStart:
+    | { dir: ResizeDir; startW: number; startH: number; mouseX: number; mouseY: number }
+    | null = null
+  const MIN_W = 320
+  const MIN_H = 420
+
+  const startDrag = (clientX: number, clientY: number) => {
+    const rect = host.getBoundingClientRect()
+    dragStart = { hostX: rect.left, hostY: rect.top, mouseX: clientX, mouseY: clientY }
+    document.body.style.userSelect = 'none'
+  }
+
+  const startResize = (dir: ResizeDir, e: MouseEvent) => {
+    const rect = host.getBoundingClientRect()
+    // Lock the host to absolute left/top so width/height adjustments don't
+    // fight with the initial right-anchored placement.
+    host.style.left = `${rect.left}px`
+    host.style.top = `${rect.top}px`
+    host.style.right = 'auto'
+    host.style.bottom = 'auto'
+    resizeStart = {
+      dir,
+      startW: rect.width,
+      startH: rect.height,
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+    }
+    document.body.style.userSelect = 'none'
+    iframe.style.pointerEvents = 'none'
+    e.preventDefault()
+  }
+
+  const onMouseMove = (e: MouseEvent) => {
+    if (dragStart) {
+      const dx = e.clientX - dragStart.mouseX
+      const dy = e.clientY - dragStart.mouseY
+      host.style.left = `${Math.max(8, dragStart.hostX + dx)}px`
+      host.style.top = `${Math.max(8, dragStart.hostY + dy)}px`
+      host.style.right = 'auto'
+      return
+    }
+    if (resizeStart) {
+      const dx = e.clientX - resizeStart.mouseX
+      const dy = e.clientY - resizeStart.mouseY
+      const maxW = Math.max(MIN_W, window.innerWidth - 16)
+      const maxH = Math.max(MIN_H, window.innerHeight - 16)
+      if (resizeStart.dir === 'right' || resizeStart.dir === 'corner') {
+        host.style.width = `${Math.min(maxW, Math.max(MIN_W, resizeStart.startW + dx))}px`
+      }
+      if (resizeStart.dir === 'bottom' || resizeStart.dir === 'corner') {
+        host.style.height = `${Math.min(maxH, Math.max(MIN_H, resizeStart.startH + dy))}px`
+      }
+    }
+  }
+  const onMouseUp = () => {
+    dragStart = null
+    resizeStart = null
+    document.body.style.userSelect = ''
+  }
+  dragHandle.addEventListener('mousedown', (e) => {
+    startDrag(e.clientX, e.clientY)
+    e.preventDefault()
+  })
+  resizeRight.addEventListener('mousedown', (e) => startResize('right', e))
+  resizeBottom.addEventListener('mousedown', (e) => startResize('bottom', e))
+  resizeCorner.addEventListener('mousedown', (e) => startResize('corner', e))
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+
+  // --- Close + iframe-initiated drag via postMessage ---
+  const close = () => {
+    host.style.opacity = '0'
+    host.style.transform = 'translateY(8px) scale(0.985)'
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    setTimeout(() => host.remove(), 230)
+  }
+  // While dragging from inside the iframe, capture all pointer events on the
+  // parent so the cursor can leave the iframe bounds without losing the drag.
+  const onMouseUpRestore = () => {
+    iframe.style.pointerEvents = ''
+    onMouseUp()
+  }
+  document.addEventListener('mouseup', onMouseUpRestore)
+  window.addEventListener('message', (event) => {
+    if (event.source !== iframe.contentWindow) return
+    const msg = event.data
+    if (!msg || typeof msg !== 'object') return
+    if (msg.type === 'bf:close-floating') close()
+    if (msg.type === 'bf:drag-start') {
+      // Coords are relative to the iframe; convert to viewport.
+      const rect = iframe.getBoundingClientRect()
+      const px = rect.left + (msg.clientX as number)
+      const py = rect.top + (msg.clientY as number)
+      startDrag(px, py)
+      iframe.style.pointerEvents = 'none'
+    }
+  })
+}
+
 // Sidepanel chat UI with inline, coalesced selection chips inside a contenteditable editor.
 export default function App() {
   // Project state
@@ -254,6 +603,10 @@ export default function App() {
   // UI state
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarView, setSidebarView] = useState<SidebarView>('projects')
+
+  // Predictive suggestions state
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [suggestionIndex, setSuggestionIndex] = useState(-1)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const inputFieldRef = useRef<HTMLDivElement>(null)
@@ -277,12 +630,171 @@ export default function App() {
   const [tabMatches, setTabMatches] = useState<TabMatch[]>([])
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
 
+  // Active tab context for the page-context chip above the input
+  const [activeTabContext, setActiveTabContext] = useState<{ title: string; host: string; favIconUrl?: string } | null>(null)
+
+  // Panel display mode (Dia-style toggle): sidebar (default), floating overlay (iframe injected
+  // into the active page — no browser chrome), or tab
+  type PanelMode = 'sidebar' | 'floating' | 'tab'
+  const panelMode: PanelMode = useMemo(() => {
+    try {
+      const m = new URLSearchParams(window.location.search).get('mode')
+      return m === 'floating' || m === 'tab' ? m : 'sidebar'
+    } catch {
+      return 'sidebar'
+    }
+  }, [])
+  const [panelMenuOpen, setPanelMenuOpen] = useState(false)
+  const panelMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!panelMenuOpen) return
+    const onClick = (e: MouseEvent) => {
+      const node = e.target as Node | null
+      if (panelMenuRef.current && node && !panelMenuRef.current.contains(node)) {
+        setPanelMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [panelMenuOpen])
+
+  const fadeOutAndClose = (after?: () => void) => {
+    document.body.classList.add('bf-fading-out')
+    window.setTimeout(() => {
+      after?.()
+      window.close()
+    }, 220)
+  }
+
+  const switchPanelMode = async (next: PanelMode) => {
+    setPanelMenuOpen(false)
+    if (next === panelMode) return
+    const baseUrl = chrome.runtime.getURL('src/sidepanel/index.html')
+
+    // From the floating overlay (iframe inside a page), the React app talks
+    // to its parent host via postMessage. Switching to sidebar/tab means
+    // dismissing the overlay first.
+    if (panelMode === 'floating') {
+      if (next === 'tab') {
+        await chrome.tabs.create({ url: `${baseUrl}?mode=tab` })
+      } else if (next === 'sidebar') {
+        // Ask the background to open the side panel for the active window.
+        try {
+          await chrome.runtime.sendMessage({ type: 'bf:open-sidepanel' })
+        } catch {
+          // ignore
+        }
+      }
+      window.parent.postMessage({ type: 'bf:close-floating' }, '*')
+      return
+    }
+
+    try {
+      if (next === 'floating') {
+        // Inject a Dia-style floating overlay into the active web page.
+        const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+        const tab = tabs[0]
+        if (
+          !tab?.id ||
+          !tab.url ||
+          tab.url.startsWith('chrome://') ||
+          tab.url.startsWith('chrome-extension://') ||
+          tab.url.startsWith('edge://') ||
+          tab.url.startsWith('about:')
+        ) {
+          alert('Floating mode needs an active web page. Switch to a regular tab and try again.')
+          return
+        }
+
+        const iframeUrl = `${baseUrl}?mode=floating`
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: injectFloatingOverlay,
+          args: [iframeUrl],
+        })
+
+        // Fade out + close the side panel / tab so only the floating panel remains.
+        fadeOutAndClose()
+      } else if (next === 'tab') {
+        await chrome.tabs.create({ url: `${baseUrl}?mode=tab` })
+        if (panelMode !== 'sidebar') fadeOutAndClose()
+      } else {
+        // Re-pin as sidebar.
+        const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+        if (tab?.windowId !== undefined && chrome.sidePanel?.open) {
+          try {
+            await chrome.sidePanel.open({ windowId: tab.windowId })
+          } catch {
+            // Best effort — user may need to click the toolbar icon.
+          }
+        }
+        if (panelMode !== 'sidebar') fadeOutAndClose()
+      }
+    } catch (err) {
+      console.error('Panel mode switch failed', err)
+    }
+  }
+
   // Sidepanel open/close state is derived from chrome.sidePanel.onStateChanged in the background.
 
   // Load projects on mount
   useEffect(() => {
     fetchProjects()
   }, [])
+
+  // Track active tab so the input can show a page-context chip
+  useEffect(() => {
+    const refresh = async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+        if (!tab || !tab.url) {
+          setActiveTabContext(null)
+          return
+        }
+        let host = ''
+        try { host = new URL(tab.url).host } catch { host = '' }
+        if (!host || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+          setActiveTabContext(null)
+          return
+        }
+        setActiveTabContext({
+          title: tab.title || host,
+          host,
+          favIconUrl: tab.favIconUrl,
+        })
+      } catch {
+        setActiveTabContext(null)
+      }
+    }
+    void refresh()
+    const onActivated = () => void refresh()
+    const onUpdated = (_id: number, info: { status?: string; url?: string; title?: string }) => {
+      if (info.status === 'complete' || info.url || info.title) void refresh()
+    }
+    chrome.tabs.onActivated.addListener(onActivated)
+    chrome.tabs.onUpdated.addListener(onUpdated)
+    return () => {
+      chrome.tabs.onActivated.removeListener(onActivated)
+      chrome.tabs.onUpdated.removeListener(onUpdated)
+    }
+  }, [])
+
+  // Pre-fill the editor with a starter prompt (used by action chips on empty state)
+  const applyQuickPrompt = (text: string) => {
+    const root = editorRef.current
+    if (!root) return
+    root.textContent = text
+    setQuery(text)
+    root.focus()
+    // Move caret to end
+    const range = document.createRange()
+    range.selectNodeContents(root)
+    range.collapse(false)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }
 
   // Close chip tooltips when clicking outside.
   useEffect(() => {
@@ -384,7 +896,7 @@ export default function App() {
       ws.addEventListener('close', onClose)
       ws.addEventListener('error', onError)
 
-      
+
     })
 
   // Stable ID for a clicked element across sync updates.
@@ -979,6 +1491,10 @@ export default function App() {
     if (!root) return
     const text = root.textContent ?? ''
     setQuery(text)
+    // Update predictive suggestions
+    const newSuggestions = getSuggestions(text)
+    setSuggestions(newSuggestions)
+    setSuggestionIndex(-1)
     const caretOffset = getCaretOffset(root)
     const beforeCaret = text.slice(0, caretOffset)
     const atIndex = beforeCaret.lastIndexOf('@')
@@ -1530,8 +2046,25 @@ export default function App() {
     }
   }, [activeProject?.id])
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll behavior:
+  //  • When a new user message is added, smoothly snap that user message to
+  //    the top of the visible area (Dia-style — the user input "lands" at top
+  //    so the assistant's thinking + response can build below it).
+  //  • Otherwise (assistant streaming, etc.), keep the bottom in view.
+  const prevMessageCountRef = useRef(0)
   useEffect(() => {
+    const last = messages[messages.length - 1]
+    const grew = messages.length > prevMessageCountRef.current
+    prevMessageCountRef.current = messages.length
+    if (grew && last?.role === 'user') {
+      // Wait one frame so the new <div> exists in the DOM, then scroll.
+      requestAnimationFrame(() => {
+        const userEls = document.querySelectorAll('.messages-container .message.user')
+        const lastUser = userEls[userEls.length - 1] as HTMLElement | undefined
+        lastUser?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+      return
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
@@ -1762,6 +2295,7 @@ export default function App() {
     let accumulated = ''
     let assistantAdded = false
     const parts: MessagePart[] = []
+    const requestStartedAt = Date.now()
 
     const ensureAssistantMessage = () => {
       if (!assistantAdded) {
@@ -1774,6 +2308,7 @@ export default function App() {
             content: accumulated,
             created_at: new Date().toISOString(),
             parts: parts.map((p) => ({ ...p })),
+            startedAt: requestStartedAt,
           },
         ])
       }
@@ -1879,6 +2414,7 @@ export default function App() {
         for (const p of parts) {
           if (p.type === 'tool') p.status = 'done'
         }
+        const elapsedMs = Date.now() - requestStartedAt
         if (!assistantAdded) {
           assistantAdded = true
           setMessages((prev) => [
@@ -1888,10 +2424,24 @@ export default function App() {
               content: finalContent,
               created_at: new Date().toISOString(),
               parts: parts.map((p) => ({ ...p })),
+              startedAt: requestStartedAt,
+              thinkingMs: elapsedMs,
             },
           ])
         } else {
-          updateAssistantMessage()
+          setMessages((prev) => {
+            const updated = [...prev]
+            const last = updated[updated.length - 1]
+            if (last && last.role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...last,
+                content: finalContent,
+                parts: parts.map((p) => ({ ...p })),
+                thinkingMs: elapsedMs,
+              }
+            }
+            return updated
+          })
         }
         if (!activeConversationId && data.conversation_id) {
           setActiveConversationId(data.conversation_id)
@@ -1945,8 +2495,66 @@ export default function App() {
       return
     }
 
+    // Handle predictive suggestions keyboard
+    if (suggestions.length > 0 && !mentionOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSuggestionIndex((prev) => Math.min(prev + 1, suggestions.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSuggestionIndex((prev) => Math.max(prev - 1, -1))
+        return
+      }
+      if (e.key === 'Tab' && suggestionIndex >= 0) {
+        e.preventDefault()
+        const selected = suggestions[suggestionIndex]
+        if (selected && editorRef.current) {
+          editorRef.current.textContent = selected
+          setQuery(selected)
+          setSuggestions([])
+          setSuggestionIndex(-1)
+          // Move caret to end
+          const range = document.createRange()
+          const sel = window.getSelection()
+          range.selectNodeContents(editorRef.current)
+          range.collapse(false)
+          sel?.removeAllRanges()
+          sel?.addRange(range)
+        }
+        return
+      }
+      if (e.key === 'Enter' && !e.shiftKey && suggestionIndex >= 0) {
+        e.preventDefault()
+        const selected = suggestions[suggestionIndex]
+        if (selected && editorRef.current) {
+          editorRef.current.textContent = selected
+          setQuery(selected)
+          setSuggestions([])
+          setSuggestionIndex(-1)
+          // Move caret to end
+          const range = document.createRange()
+          const sel = window.getSelection()
+          range.selectNodeContents(editorRef.current)
+          range.collapse(false)
+          sel?.removeAllRanges()
+          sel?.addRange(range)
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSuggestions([])
+        setSuggestionIndex(-1)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      setSuggestions([])
+      setSuggestionIndex(-1)
       handleSubmit(e)
       return
     }
@@ -2029,6 +2637,12 @@ export default function App() {
           <>
             <div className="sidebar-header">
               <h2>Projects</h2>
+              <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
             </div>
             <div className="project-create">
               <input
@@ -2094,6 +2708,12 @@ export default function App() {
                   <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </button>
+              <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} title="Close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
             </div>
             <div className="conversation-list">
               {conversations.length === 0 && (
@@ -2116,47 +2736,123 @@ export default function App() {
 
       {/* Main chat area */}
       <div className="chat-main">
-        {/* Header */}
-        <div className="chat-header">
+        {/* Header — doubles as drag handle when in floating overlay mode */}
+        <div
+          className={`chat-header ${panelMode === 'floating' ? 'chat-header-draggable' : ''}`}
+          onMouseDown={(e) => {
+            if (panelMode !== 'floating') return
+            // Don't drag when clicking interactive elements.
+            const target = e.target as HTMLElement
+            if (target.closest('button, select, .panel-mode-menu, input, textarea, [contenteditable]')) {
+              return
+            }
+            window.parent.postMessage(
+              { type: 'bf:drag-start', clientX: e.clientX, clientY: e.clientY },
+              '*',
+            )
+          }}
+        >
           <button className="menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)} title="Toggle sidebar">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="3" y1="6" x2="21" y2="6" />
-              <line x1="3" y1="12" x2="21" y2="12" />
-              <line x1="3" y1="18" x2="21" y2="18" />
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" />
+              <path d="m17 3 4 4-9.5 9.5L7 17l.5-4.5L17 3z" />
             </svg>
           </button>
-          <h1>{activeProject ? activeProject.name : 'AI Chat'}</h1>
-          <select
-            className="provider-select"
-            value={provider}
-            onChange={(e) => setProvider(e.target.value as 'gemini' | 'openai' | 'nvidia')}
-            title="LLM provider"
-          >
-            <option value="gemini">Gemini</option>
-            <option value="openai">OpenAI</option>
-            <option value="nvidia">NVIDIA</option>
-          </select>
-          {activeProject && (
-            <>
+          <h1>{activeProject ? activeProject.name : 'Browser Forge'}</h1>
+          <div className="header-actions">
+            <select
+              className="provider-select"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value as 'gemini' | 'openai' | 'nvidia')}
+              title="LLM provider"
+            >
+              <option value="gemini">Gemini</option>
+              <option value="openai">OpenAI</option>
+              <option value="nvidia">NVIDIA</option>
+            </select>
+            {activeProject && (
+              <>
+                <button
+                  className={`icon-btn ${rulesOpen ? 'active' : ''}`}
+                  onClick={() => setRulesOpen(!rulesOpen)}
+                  title="Agent memory"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+                    <path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z" />
+                    <line x1="10" y1="22" x2="14" y2="22" />
+                  </svg>
+                  {rules.length > 0 && <span className="rules-badge">{rules.length}</span>}
+                </button>
+                <button className="icon-btn" onClick={startNewConversation} title="New chat">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                </button>
+              </>
+            )}
+            <div className="panel-mode-wrapper" ref={panelMenuRef}>
               <button
-                className={`new-chat-header-btn ${rulesOpen ? 'active' : ''}`}
-                onClick={() => setRulesOpen(!rulesOpen)}
-                title="Agent memory"
+                className="icon-btn"
+                onClick={() => setPanelMenuOpen((v) => !v)}
+                title="Panel layout"
+                aria-haspopup="menu"
+                aria-expanded={panelMenuOpen}
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z" />
-                  <line x1="10" y1="22" x2="14" y2="22" />
-                </svg>
-                {rules.length > 0 && <span className="rules-badge">{rules.length}</span>}
-              </button>
-              <button className="new-chat-header-btn" onClick={startNewConversation} title="New chat">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 20h9" />
-                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                <svg width="18" height="14" viewBox="0 0 22 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="1" y="1" width="20" height="14" rx="2.5" />
+                  <rect x="11" y="6" width="8" height="6" rx="1.2" fill="currentColor" stroke="none" opacity="0.85" />
                 </svg>
               </button>
-            </>
-          )}
+              {panelMenuOpen && (
+                <div className="panel-mode-menu" role="menu">
+                  <button
+                    className={`panel-mode-item ${panelMode === 'sidebar' ? 'active' : ''}`}
+                    onClick={() => switchPanelMode('sidebar')}
+                    role="menuitem"
+                  >
+                    <span className="panel-mode-check">
+                      {panelMode === 'sidebar' && (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </span>
+                    Sidebar
+                  </button>
+                  <button
+                    className={`panel-mode-item ${panelMode === 'floating' ? 'active' : ''}`}
+                    onClick={() => switchPanelMode('floating')}
+                    role="menuitem"
+                  >
+                    <span className="panel-mode-check">
+                      {panelMode === 'floating' && (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </span>
+                    Floating
+                  </button>
+                  <div className="panel-mode-divider" />
+                  <button
+                    className={`panel-mode-item ${panelMode === 'tab' ? 'active' : ''}`}
+                    onClick={() => switchPanelMode('tab')}
+                    role="menuitem"
+                  >
+                    <span className="panel-mode-check">
+                      {panelMode === 'tab' && (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </span>
+                    Open in New Tab
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Rules panel */}
@@ -2195,131 +2891,182 @@ export default function App() {
         {/* Messages */}
         <div className="messages-container">
           {!activeProject && (
-            <div className="empty-chat">
-              <div className="empty-chat-icon">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.4">
-                  <path d="M2 20h.01M7 20v-4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v4M12 10V4m0 0L9 7m3-3 3 3" />
-                </svg>
+            <div className="empty-canvas">
+              <div className="preview-card preview-card-floating">
+                <div className="preview-card-pill">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                  </svg>
+                  <span>Browser Forge</span>
+                </div>
+                <div className="preview-card-quote">
+                  "Hide YouTube Shorts so I can focus."
+                </div>
               </div>
-              <p>Select or create a project to get started</p>
+              <div className="empty-canvas-title">Build extensions from this page</div>
+              <div className="empty-canvas-hint">Open a project from the menu, then describe a change.</div>
             </div>
           )}
           {activeProject && messages.length === 0 && !loading && (
-            <div className="empty-chat">
-              <div className="empty-chat-icon">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.4">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
+            <div className="empty-canvas">
+              <div className="preview-card preview-card-floating">
+                <div className="preview-card-pill">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                  </svg>
+                  <span>Browser Forge</span>
+                </div>
+                <div className="preview-card-quote">
+                  "Hide YouTube Shorts so I can focus."
+                </div>
               </div>
-              <p>Start a new conversation</p>
+              <div className="empty-canvas-title">Build extensions from this page</div>
+              <div className="empty-canvas-hint">⌘ + click any element to attach it as context.</div>
+              <div className="action-chips">
+                <button
+                  type="button"
+                  className="action-chip"
+                  onClick={() => applyQuickPrompt('Hide ')}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                    <line x1="1" y1="1" x2="23" y2="23" />
+                  </svg>
+                  Hide elements
+                </button>
+                <button
+                  type="button"
+                  className="action-chip"
+                  onClick={() => applyQuickPrompt('Show only ')}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                  </svg>
+                  Filter content
+                </button>
+                <button
+                  type="button"
+                  className="action-chip"
+                  onClick={() => applyQuickPrompt('Restyle ')}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="13.5" cy="6.5" r=".5" />
+                    <circle cx="17.5" cy="10.5" r=".5" />
+                    <circle cx="8.5" cy="7.5" r=".5" />
+                    <circle cx="6.5" cy="12.5" r=".5" />
+                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z" />
+                  </svg>
+                  Restyle page
+                </button>
+              </div>
             </div>
           )}
-          {messages.map((msg, i) => (
-            <div key={i} className={`message ${msg.role}`}>
-              {msg.role === 'assistant' && msg.parts && msg.parts.length > 0 ? (
-                msg.parts.map((part, j) =>
-                  part.type === 'tool' ? (
-                    <div key={j} className={`tool-call ${part.status}`}>
-                      <span className="tool-call-icon">
-                        {part.status === 'running' ? (
-                          <svg className="tool-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-                          </svg>
-                        ) : (
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </span>
-                      {part.favIconUrl && (
-                        <img src={part.favIconUrl} alt="" className="tool-call-favicon" width="14" height="14" />
-                      )}
-                      <span className="tool-call-label">{part.label}</span>
-                    </div>
-                  ) : part.type === 'extension_ready' ? (
-                    <ExtensionInstallCard key={j} path={part.path} projectId={activeProject?.id} />
-                  ) : (
-                    <div key={j} className="message-content">
-                      <ReactMarkdown>{part.content}</ReactMarkdown>
-                    </div>
-                  )
-                )
-              ) : (
-                <div className="message-content">
-                  {msg.role === 'assistant' ? (
-                    <ReactMarkdown>{msg.content}</ReactMarkdown>
-                  ) : (msg.displayParts && msg.displayParts.length > 0) || parseMessageWithChipMarkers(msg.content) ? (
-                    <span className="message-inline-parts">
-                      {(msg.displayParts && msg.displayParts.length > 0
-                        ? msg.displayParts
-                        : parseMessageWithChipMarkers(msg.content) || []
-                      ).map((part, j) => {
-                        if (part.type === 'text') {
-                          return <span key={j}>{part.content}</span>
-                        }
-                        const chipKey = `${i}-${j}`
-                        const isOpen = openChipKey === chipKey
-                        const label = getChipLabelForPart(part)
-                        const host = getChipHostForPart(part)
-                        return (
-                          <span key={j} className="chip-tooltip-wrapper">
-                            <button
-                              type="button"
-                              className="context-chip message-chip chip-tooltip-trigger"
-                              title="Click to preview raw HTML"
-                              onClick={() => setOpenChipKey(isOpen ? null : chipKey)}
-                            >
-                              {(part.items.length > 0 || host) && (
-                                <img
-                                  className="context-chip-icon"
-                                  src={getFaviconUrl(host)}
-                                  alt={label}
-                                />
+          {messages.map((msg, i) => {
+            const isLastAssistant =
+              msg.role === 'assistant' && i === messages.length - 1
+            const isStreamingThis = isLastAssistant && (loading || thinking)
+            const toolPartsList = (msg.parts ?? []).filter(
+              (p): p is ToolPart => p.type === 'tool',
+            )
+            const nonToolParts = (msg.parts ?? []).filter((p) => p.type !== 'tool')
+            return (
+              <div key={i} className={`message ${msg.role} bf-msg-in`}>
+                {msg.role === 'assistant' && msg.parts && msg.parts.length > 0 ? (
+                  <>
+                    {toolPartsList.length > 0 && (
+                      <ThinkingBlock
+                        toolParts={toolPartsList}
+                        isStreaming={isStreamingThis}
+                        durationMs={msg.thinkingMs}
+                      />
+                    )}
+                    {nonToolParts.map((part, j) =>
+                      part.type === 'extension_ready' ? (
+                        <ExtensionInstallCard key={j} path={part.path} projectId={activeProject?.id} />
+                      ) : (
+                        <div key={j} className="message-content bf-part-in">
+                          <ReactMarkdown>{part.content}</ReactMarkdown>
+                        </div>
+                      ),
+                    )}
+                  </>
+                ) : (
+                  <div className="message-content">
+                    {msg.role === 'assistant' ? (
+                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    ) : (msg.displayParts && msg.displayParts.length > 0) || parseMessageWithChipMarkers(msg.content) ? (
+                      <span className="message-inline-parts">
+                        {(msg.displayParts && msg.displayParts.length > 0
+                          ? msg.displayParts
+                          : parseMessageWithChipMarkers(msg.content) || []
+                        ).map((part, j) => {
+                          if (part.type === 'text') {
+                            return <span key={j}>{part.content}</span>
+                          }
+                          const chipKey = `${i}-${j}`
+                          const isOpen = openChipKey === chipKey
+                          const label = getChipLabelForPart(part)
+                          const host = getChipHostForPart(part)
+                          return (
+                            <span key={j} className="chip-tooltip-wrapper">
+                              <button
+                                type="button"
+                                className="context-chip message-chip chip-tooltip-trigger"
+                                title="Click to preview raw HTML"
+                                onClick={() => setOpenChipKey(isOpen ? null : chipKey)}
+                              >
+                                {(part.items.length > 0 || host) && (
+                                  <img
+                                    className="context-chip-icon"
+                                    src={getFaviconUrl(host)}
+                                    alt={label}
+                                  />
+                                )}
+                                <span className="context-chip-label">{label}</span>
+                              </button>
+                              {isOpen && (
+                                <div className="chip-tooltip" role="tooltip">
+                                  <div className="chip-tooltip-title">Raw HTML</div>
+                                  <pre className="chip-tooltip-content">{part.rawHtml || 'No HTML captured.'}</pre>
+                                </div>
                               )}
-                              <span className="context-chip-label">{label}</span>
-                            </button>
-                            {isOpen && (
-                              <div className="chip-tooltip" role="tooltip">
-                                <div className="chip-tooltip-title">Raw HTML</div>
-                                <pre className="chip-tooltip-content">{part.rawHtml || 'No HTML captured.'}</pre>
-                              </div>
-                            )}
-                          </span>
-                        )
-                      })}
-                    </span>
-                  ) : looksLikeHtml(msg.content) ? (
-                    <span className="message-inline-parts">
-                      {(() => {
-                        const chipKey = `html-${i}`
-                        const isOpen = openChipKey === chipKey
-                        return (
-                          <span className="chip-tooltip-wrapper">
-                            <button
-                              type="button"
-                              className="context-chip message-chip chip-tooltip-trigger"
-                              title="Click to preview raw HTML"
-                              onClick={() => setOpenChipKey(isOpen ? null : chipKey)}
-                            >
-                              <span className="context-chip-label">Context HTML</span>
-                            </button>
-                            {isOpen && (
-                              <div className="chip-tooltip" role="tooltip">
-                                <div className="chip-tooltip-title">Raw HTML</div>
-                                <pre className="chip-tooltip-content">{msg.content}</pre>
-                              </div>
-                            )}
-                          </span>
-                        )
-                      })()}
-                    </span>
-                  ) : (
-                    msg.content
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                            </span>
+                          )
+                        })}
+                      </span>
+                    ) : looksLikeHtml(msg.content) ? (
+                      <span className="message-inline-parts">
+                        {(() => {
+                          const chipKey = `html-${i}`
+                          const isOpen = openChipKey === chipKey
+                          return (
+                            <span className="chip-tooltip-wrapper">
+                              <button
+                                type="button"
+                                className="context-chip message-chip chip-tooltip-trigger"
+                                title="Click to preview raw HTML"
+                                onClick={() => setOpenChipKey(isOpen ? null : chipKey)}
+                              >
+                                <span className="context-chip-label">Context HTML</span>
+                              </button>
+                              {isOpen && (
+                                <div className="chip-tooltip" role="tooltip">
+                                  <div className="chip-tooltip-title">Raw HTML</div>
+                                  <pre className="chip-tooltip-content">{msg.content}</pre>
+                                </div>
+                              )}
+                            </span>
+                          )
+                        })()}
+                      </span>
+                    ) : (
+                      msg.content
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
           {loading && (
             <div className="message assistant">
               <div className="message-content typing">
@@ -2347,13 +3094,74 @@ export default function App() {
 
         {/* Input */}
         <form onSubmit={handleSubmit} className="chat-input">
-          <div className="chat-input-main">
+          {activeTabContext && (
+            <div className="page-context-chip" title={activeTabContext.title}>
+              {activeTabContext.favIconUrl ? (
+                <img className="page-context-favicon" src={activeTabContext.favIconUrl} alt="" />
+              ) : (
+                <div className="page-context-favicon page-context-favicon-fallback" />
+              )}
+              <div className="page-context-text">
+                <span className="page-context-title">{activeTabContext.title}</span>
+                <span className="page-context-host">{activeTabContext.host}</span>
+              </div>
+            </div>
+          )}
+          <div className="input-shell">
+            {/* Predictive suggestions */}
+            {suggestions.length > 0 && (
+              <div className="suggestions-panel">
+                {suggestions.map((s, i) => {
+                  const q = query.toLowerCase().trim()
+                  const matchIdx = s.toLowerCase().indexOf(q)
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      className={`suggestion-item ${i === suggestionIndex ? 'active' : ''}`}
+                      onMouseEnter={() => setSuggestionIndex(i)}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        if (editorRef.current) {
+                          editorRef.current.textContent = s
+                          setQuery(s)
+                          setSuggestions([])
+                          setSuggestionIndex(-1)
+                          const range = document.createRange()
+                          const sel = window.getSelection()
+                          range.selectNodeContents(editorRef.current)
+                          range.collapse(false)
+                          sel?.removeAllRanges()
+                          sel?.addRange(range)
+                          editorRef.current.focus()
+                        }
+                      }}
+                    >
+                      <svg className="suggestion-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="11" cy="11" r="8" />
+                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      </svg>
+                      <span className="suggestion-text">
+                        {matchIdx >= 0 ? (
+                          <>
+                            {s.slice(0, matchIdx + q.length)}
+                            <strong>{s.slice(matchIdx + q.length)}</strong>
+                          </>
+                        ) : (
+                          s
+                        )}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
             <div className="chat-input-field" ref={inputFieldRef}>
               <div
                 ref={editorRef}
                 className="chat-input-editor"
                 contentEditable={Boolean(activeProject) && !loading}
-                data-placeholder={activeProject ? 'Type a message...' : 'Select a project first...'}
+                data-placeholder={activeProject ? 'Ask a question about this page...' : 'Select a project first...'}
                 onInput={handleEditorInput}
                 onClick={handleEditorClick}
                 onKeyDown={handleEditorKeyDown}
@@ -2407,18 +3215,47 @@ export default function App() {
                 </div>
               )}
             </div>
+            <div className="input-row-actions">
+              <button
+                type="button"
+                className="input-action-btn"
+                title="Attach a tab"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  applyQuickPrompt('@')
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="input-action-btn"
+                title="More"
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="1" />
+                  <circle cx="19" cy="12" r="1" />
+                  <circle cx="5" cy="12" r="1" />
+                </svg>
+              </button>
+              <div className="input-row-spacer" />
+              <button
+                type="submit"
+                className="send-circle"
+                disabled={loading || !query.trim() || !activeProject || htmlSummaryCount > 0}
+                title="Send message"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="12" y1="19" x2="12" y2="5" />
+                  <polyline points="5 12 12 5 19 12" />
+                </svg>
+              </button>
+            </div>
           </div>
-          <button
-            type="submit"
-            className="send-btn"
-            disabled={loading || !query.trim() || !activeProject || htmlSummaryCount > 0}
-            title="Send message"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
         </form>
       </div>
     </div>
