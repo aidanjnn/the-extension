@@ -39,26 +39,50 @@ A novel-prompt detection layer lives on top of all of that. If your request scor
 Here's the full flow, from prompt to installed extension:
 
 ```mermaid
-flowchart LR
+flowchart TB
     user["User in Chrome side panel"] --> mode{"Mode?"}
-    mode -- "Create" --> ws["FastAPI WebSocket /ws/chat"]
-    mode -- "Edit DOM" --> overlay["Cmd-hover purple overlay<br/>captures selector, rect, HTML"]
-    overlay --> liveOps["Apply live ops<br/>hide / resize / style / move / text"]
-    liveOps --> exportBtn["Export edits as extension"]
-    exportBtn --> domApi["POST /api/dom-edits/export"]
-    ws --> orch["Browser Orchestrator<br/>(registered on Agentverse)"]
+
+    subgraph inputs["Input paths"]
+        direction LR
+        ws["FastAPI WebSocket<br/>/ws/chat"]
+        overlay["Cmd-hover purple overlay<br/>selector, rect, HTML"]
+        liveOps["Live ops<br/>hide / resize / style<br/>move / text"]
+        exportBtn["Export edits<br/>as extension"]
+        domApi["POST /api/dom-edits/export"]
+        overlay --> liveOps --> exportBtn --> domApi
+    end
+
+    mode -- "Create" --> ws
+    mode -- "Edit DOM" --> overlay
+
+    subgraph brain["Orchestrator on Agentverse"]
+        direction TB
+        orch["Browser Orchestrator"]
+        score{"Intent score >= 7?"}
+        det["Deterministic template"]
+        rag["RAG: curated patterns<br/>+ per-site DOM bootstrap"]
+        llm["Codegen via Gemini"]
+        orch --> score
+        score -- "yes" --> det
+        score -- "no" --> rag --> llm
+    end
+
+    ws --> orch
     domApi --> orch
-    orch --> score{"Intent score >= 7?"}
-    score -- "yes" --> det["Deterministic template"]
-    score -- "no" --> rag["RAG: curated patterns<br/>+ per-site DOM bootstrap"]
-    rag --> llm["Codegen via Gemini"]
-    det --> files["manifest.json<br/>content.js<br/>content.css"]
+
+    subgraph build["Build &amp; deliver"]
+        direction LR
+        files["manifest.json<br/>content.js<br/>content.css"]
+        validate["Manifest V3<br/>validator"]
+        pack["ZIP packager"]
+        ready["extension_ready"]
+        panel["Side panel<br/>install card"]
+        chrome["Load unpacked<br/>in Chrome"]
+        files --> validate --> pack --> ready --> panel --> chrome
+    end
+
+    det --> files
     llm --> files
-    files --> validate["Manifest V3 validator"]
-    validate --> pack["Packager: ZIP artifact"]
-    pack --> ready["extension_ready event"]
-    ready --> panel["Side panel install card"]
-    panel --> chrome["Load unpacked in Chrome"]
 ```
 
 The Edit DOM mode was the trickiest piece. The content script tracks selection order, captures the original style of every element you touch (so we can revert cleanly when you switch pages), and translates phrases like "make the second one a bit wider" into a normalized op set: `hide`, `resize`, `style`, `move`, `emphasize`, `text`. When you hit Export, we replay that history server-side, render the same operations as a static `content.js` and `content.css`, and run the result through the same validator and packager the Create flow uses. So an Edit DOM session and a Create-mode prompt produce the exact same kind of artifact at the end.
