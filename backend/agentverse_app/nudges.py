@@ -312,36 +312,105 @@ DOM_IMPLEMENTATION_CORPUS: list[dict[str, Any]] = [
     },
 ]
 
+# Scores combine site (4) + terms (2–5). Site-only ≈4 is too weak to run a
+# hard-coded product template: we require a clear intent + site alignment.
+DETERMINISTIC_INTENT_MIN_SCORE = 7
 
-def _score_entries(query: str, target_urls: list[str]) -> list[dict[str, Any]]:
-    haystack = f"{query} {' '.join(target_urls)}".lower()
-    tokens = set(re.findall(r"[a-z0-9]+", haystack))
-    requested_sites = {
+# Fused per-site notes for the LLM when the user’s ask is *not* a direct match to a
+# single corpus row but the host is one we know well.
+SITE_DOM_BOOTSTRAP: dict[str, str] = {
+    "youtube": (
+        "YouTube (general): heavy custom elements (ytd-*) in Shadow DOM; match "
+        "ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, "
+        "ytd-reel-shelf-renderer, ytd-guide-* for nav. Watch page has primary column "
+        "plus #secondary. SPA navigation — MutationObserver. Prefer href checks for "
+        "/shorts, /watch. Avoid hiding ytd-app root or entire rich-grid."
+    ),
+    "instagram": (
+        "Instagram (general): [role=main] feed, article per post, nav links in "
+        "header/sidebar. Routes /reels/, /direct/, /explore/. Sticky headers and "
+        "infinite scroll; use scoped selectors and re-run on route changes. Avoid "
+        "hiding main or every article."
+    ),
+    "gmail": (
+        "Gmail (general): list rows in table-like structures, role=row, tr, category "
+        "tabs role=tab. Split panes: list, thread, right rail. Class names are obfuscated; "
+        "prefer ARIA, data attributes, and stable list structure, not a single class."
+    ),
+    "outlook": (
+        "Outlook (general): list rows, reading pane, complementary ads rail. Opaque "
+        "classnames — use list patterns, ARIA, message cards, and region roles."
+    ),
+    "calendar": (
+        "Google Calendar (general): time grid, event chips, popover detail, keyboard "
+        "ARIA. Week/day/month views; re-run on view changes and event loads."
+    ),
+    "linkedin": (
+        "LinkedIn (general): feed cards (feed-shared-update-*, scroller), nav global, "
+        "messaging. Promoted/Sponsored labels in-card. Opaque BEM; combine text near "
+        "the card, data attributes, and feed structure — never hide entire scaffold."
+    ),
+    "x": (
+        "X / Twitter (general): [data-testid] on tweets, side nav, search, trends; "
+        "primary column vs sidebar. Promoted/Ad labels, placement tracking. Popstate + "
+        "MutationObserver. Never hide the whole [data-testid=primaryColumn] or root layout."
+    ),
+    "reddit": (
+        "Reddit (general): custom elements (shreddit-*), post threads, comment trees, "
+        "right rail aside/complementary. New vs old — mix selectors, viewport checks "
+        "for right-rail, data-testid. Avoid main post column."
+    ),
+}
+
+
+def _requested_sites_from_haystack(haystack: str, tokens: set[str]) -> set[str]:
+    return {
         site
         for entry in DOM_IMPLEMENTATION_CORPUS
         for site in entry["sites"]
         if _site_matches(site, haystack, tokens)
     }
-    scored: list[tuple[int, dict[str, Any]]] = []
 
+
+def intent_score_for_entry(
+    query: str,
+    target_urls: list[str],
+    entry: dict[str, Any],
+) -> int:
+    """Same scoring as retrieve_context ranking, for a single corpus entry."""
+    haystack = f"{query} {' '.join(target_urls)}".lower()
+    tokens = set(re.findall(r"[a-z0-9]+", haystack))
+    requested_sites = _requested_sites_from_haystack(haystack, tokens)
+    score = 0
+    entry_site_match = False
+    for site in entry.get("sites", []):
+        if _site_matches(str(site), haystack, tokens):
+            score += 4
+            entry_site_match = True
+    if requested_sites and not entry_site_match:
+        return 0
+    for term in entry.get("terms", []):
+        term_lower = str(term).lower()
+        if term_lower in haystack:
+            score += 5 if " " in term_lower else 3
+        elif term_lower in tokens:
+            score += 2
+    return score
+
+
+def should_apply_deterministic_template(
+    query: str, target_urls: list[str], entry: dict[str, Any]
+) -> bool:
+    """True only when the user query clearly matches this curated nudge, not just the host."""
+    return intent_score_for_entry(query, target_urls, entry) >= DETERMINISTIC_INTENT_MIN_SCORE
+
+
+def _score_entries(query: str, target_urls: list[str]) -> list[dict[str, Any]]:
+    scored: list[tuple[int, dict[str, Any]]] = []
     for entry in DOM_IMPLEMENTATION_CORPUS:
-        score = 0
-        entry_site_match = False
-        for site in entry["sites"]:
-            if _site_matches(site, haystack, tokens):
-                score += 4
-                entry_site_match = True
-        if requested_sites and not entry_site_match:
-            continue
-        for term in entry["terms"]:
-            term_lower = term.lower()
-            if term_lower in haystack:
-                score += 5 if " " in term_lower else 3
-            elif term_lower in tokens:
-                score += 2
+        score = intent_score_for_entry(query, target_urls, entry)
         if score:
             scored.append((score, entry))
-
     scored.sort(key=lambda item: item[0], reverse=True)
     return [entry for _, entry in scored]
 
@@ -363,9 +432,56 @@ def retrieve_context(query: str, target_urls: list[str], limit: int = 5) -> list
     ]
 
 
+def canonical_sites_in_target_urls(target_urls: list[str]) -> list[str]:
+    """Resolve manifest URL patterns to known site keys for DOM bootstrap hints."""
+    found: list[str] = []
+    for raw in target_urls:
+        h = (raw or "").lower()
+        if not h:
+            continue
+        for key, needle in (
+            ("youtube", "youtube"),
+            ("youtube", "youtu.be"),
+            ("reddit", "reddit.com"),
+            ("reddit", "old.reddit"),
+            ("instagram", "instagram.com"),
+            ("gmail", "mail.google.com"),
+            ("gmail", "mail.google"),
+            ("outlook", "outlook."),
+            ("outlook", "outlook.com"),
+            ("outlook", "office.com"),
+            ("calendar", "calendar.google.com"),
+            ("calendar", "google.com/calendar"),
+            ("linkedin", "linkedin.com"),
+            ("x", "x.com"),
+            ("x", "twitter.com"),
+        ):
+            if needle in h and key not in found:
+                found.append(key)
+    return found
+
+
+def site_bootstrap_for_urls(target_urls: list[str]) -> list[str]:
+    """LLM context lines for *novel* per-site work using shared DOM knowledge."""
+    lines: list[str] = []
+    for key in canonical_sites_in_target_urls(target_urls):
+        text = SITE_DOM_BOOTSTRAP.get(key)
+        if text:
+            label = "X (Twitter)" if key == "x" else key.replace("-", " ").title()
+            lines.append(f"Site overview ({label}): {text}")
+    return lines
+
+
 def _site_matches(site: str, haystack: str, tokens: set[str]) -> bool:
     if site == "x":
         return "x.com" in haystack or "twitter.com" in haystack or "twitter" in tokens or "x" in tokens
+    if site == "youtube":
+        return (
+            site in tokens
+            or f"{site}.com" in haystack
+            or f"www.{site}.com" in haystack
+            or "youtu.be" in haystack
+        )
     return site in tokens or f"{site}.com" in haystack or f"www.{site}.com" in haystack
 
 

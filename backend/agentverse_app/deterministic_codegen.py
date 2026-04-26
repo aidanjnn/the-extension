@@ -10,7 +10,10 @@ import json
 import re
 from typing import Any, Callable
 
-from agentverse_app.nudges import retrieve_context_entries
+from agentverse_app.nudges import (
+    retrieve_context_entries,
+    should_apply_deterministic_template,
+)
 
 LOCAL_CLASSIFY_ENDPOINT = "http://localhost:8000/api/classify"
 
@@ -766,8 +769,12 @@ def build_deterministic_files(
     Returns:
         (files, use_case_id) on success, else None.
     """
-    entries = retrieve_context_entries(query, target_urls, limit=8)
+    entries = retrieve_context_entries(query, target_urls, limit=12)
     for entry in entries:
+        if not should_apply_deterministic_template(query, target_urls, entry):
+            # Host alone is not enough: novel asks fall through to the LLM, which
+            # still receives nudge RAG + site DOM bootstrap in rag.py.
+            continue
         use_case_id = str(entry.get("id", ""))
         builder = BUILDERS.get(use_case_id)
         if not builder:

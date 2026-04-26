@@ -176,6 +176,9 @@ async def _generate_with_llm(
         f"Target URLs (use these as manifest content_scripts.matches): "
         f"{json.dumps(target_urls)}\n"
         f"Extension display name: {extension_name}\n\n"
+        "If the request is bespoke (not a single off-the-shelf pattern), still apply "
+        "the site overviews and DOM notes below, and invent selectors that match the "
+        "user’s specific goal for that page structure.\n\n"
         f"Retrieved implementation context:\n{retrieved_context}\n\n"
         + (
             "The previous output failed these checks. Fix every issue:\n"
