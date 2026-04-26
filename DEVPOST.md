@@ -39,7 +39,7 @@ A novel-prompt detection layer lives on top of all of that. If your request scor
 Here's the full flow, from prompt to installed extension:
 
 ```mermaid
-flowchart TD
+flowchart LR
     user["User in Chrome side panel"] --> mode{"Mode?"}
     mode -- "Create" --> ws["FastAPI WebSocket /ws/chat"]
     mode -- "Edit DOM" --> overlay["Cmd-hover purple overlay<br/>captures selector, rect, HTML"]
