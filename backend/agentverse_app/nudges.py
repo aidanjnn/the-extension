@@ -54,7 +54,7 @@ DOM_IMPLEMENTATION_CORPUS: list[dict[str, Any]] = [
         "id": "youtube-keyword-filter",
         "title": "Filter YouTube Videos By Keywords",
         "sites": ["youtube"],
-        "terms": ["filter", "keyword", "keywords", "videos with"],
+        "terms": ["filter", "keyword", "keywords", "videos with", "only show", "show only"],
         "guidance": (
             "YouTube semantic filtering: identify each video item using containers "
             "like `ytd-rich-item-renderer`, `ytd-video-renderer`, "

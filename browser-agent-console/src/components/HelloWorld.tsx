@@ -23,7 +23,7 @@ export default function HelloWorld(props: { msg: string }) {
 
       <p>
         Check out
-        <a href="https://github.com/aidanjnn/the-extension" target="_blank" rel="noreferrer">Browser Forge</a>
+        <a href="https://github.com/aidanjnn/the-extension" target="_blank" rel="noreferrer">Layer</a>
         , the official repo
       </p>
 

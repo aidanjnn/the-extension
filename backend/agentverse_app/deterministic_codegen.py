@@ -24,6 +24,7 @@ def _manifest(
     target_urls: list[str],
     description: str,
     host_permissions: list[str] | None = None,
+    background_js: bool = False,
 ) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "manifest_version": 3,
@@ -39,6 +40,8 @@ def _manifest(
             }
         ],
     }
+    if background_js:
+        manifest["background"] = {"service_worker": "background.js"}
     if host_permissions:
         manifest["host_permissions"] = host_permissions
     return manifest
@@ -109,7 +112,7 @@ function scheduleApply() {{
     try {{
       applyRules();
     }} catch (err) {{
-      console.debug('Browser Forge applyRules failed', err);
+      console.debug('Layer applyRules failed', err);
     }}
   }});
 }}
@@ -258,16 +261,8 @@ async function classify(items) {{
     .map((item) => ({{ id: item.id, text: item.text }}));
   if (payload.length === 0) return;
   try {{
-    const res = await fetch(CLASSIFY_ENDPOINT, {{
-      method: 'POST',
-      headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{
-        filter_description: FILTER_DESCRIPTION,
-        items: payload,
-      }}),
-    }});
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await classifyInBackground(payload);
+    if (!data?.ok) return;
     const matches = new Set(Array.isArray(data?.matches) ? data.matches.map(String) : []);
     for (const item of payload) {{
       cache.set(item.id, matches.has(item.id));
@@ -275,6 +270,30 @@ async function classify(items) {{
   }} catch {{
     // Keep items visible on classify failure.
   }}
+}}
+
+function classifyInBackground(items) {{
+  return new Promise((resolve) => {{
+    if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {{
+      resolve({{ ok: false, matches: [] }});
+      return;
+    }}
+    chrome.runtime.sendMessage(
+      {{
+        type: 'LAYER_CLASSIFY_ITEMS',
+        endpoint: CLASSIFY_ENDPOINT,
+        filter_description: FILTER_DESCRIPTION,
+        items,
+      }},
+      (response) => {{
+        if (chrome.runtime.lastError || !response?.ok) {{
+          resolve({{ ok: false, matches: [] }});
+          return;
+        }}
+        resolve(response);
+      }},
+    );
+  }});
 }}
 
 async function run() {{
@@ -305,21 +324,81 @@ window.addEventListener('hashchange', () => {{ void run(); }});
 """.strip()
 
 
-def _files(name: str, target_urls: list[str], description: str, content_js: str, content_css: str | None = None, host_permissions: list[str] | None = None) -> dict[str, str]:
+def _classification_background_script() -> str:
+    return f"""
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {{
+  if (!message || message.type !== 'LAYER_CLASSIFY_ITEMS') return false;
+
+  const endpoint =
+    typeof message.endpoint === 'string'
+      ? message.endpoint
+      : {json.dumps(LOCAL_CLASSIFY_ENDPOINT)};
+  const filterDescription =
+    typeof message.filter_description === 'string'
+      ? message.filter_description
+      : '';
+  const items = Array.isArray(message.items) ? message.items : [];
+
+  (async () => {{
+    try {{
+      const response = await fetch(endpoint, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          filter_description: filterDescription,
+          items,
+        }}),
+      }});
+      if (!response.ok) {{
+        sendResponse({{ ok: false, matches: [], error: `HTTP ${{response.status}}` }});
+        return;
+      }}
+      const data = await response.json();
+      sendResponse({{
+        ok: true,
+        matches: Array.isArray(data?.matches) ? data.matches.map(String) : [],
+      }});
+    }} catch (error) {{
+      sendResponse({{
+        ok: false,
+        matches: [],
+        error: error instanceof Error ? error.message : String(error),
+      }});
+    }}
+  }})();
+
+  return true;
+}});
+""".strip()
+
+
+def _files(
+    name: str,
+    target_urls: list[str],
+    description: str,
+    content_js: str,
+    content_css: str | None = None,
+    host_permissions: list[str] | None = None,
+    background_js: str | None = None,
+) -> dict[str, str]:
     css = content_css or _base_css()
-    return {
+    files = {
         "manifest.json": json.dumps(
             _manifest(
                 name=name,
                 target_urls=target_urls,
                 description=description,
                 host_permissions=host_permissions,
+                background_js=bool(background_js),
             ),
             indent=2,
         ),
         "content.js": content_js,
         "content.css": css,
     }
+    if background_js:
+        files["background.js"] = background_js
+    return files
 
 
 def _youtube_shorts(query: str, target_urls: list[str], name: str) -> dict[str, str]:
@@ -378,6 +457,7 @@ def _youtube_keyword_filter(query: str, target_urls: list[str], name: str) -> di
         "Filter YouTube videos by semantic criteria.",
         js,
         host_permissions=["http://localhost:8000/*"],
+        background_js=_classification_background_script(),
     )
 
 
@@ -511,6 +591,7 @@ def _email_deadlines(query: str, target_urls: list[str], name: str) -> dict[str,
         "Highlight deadline/action emails using semantic classification.",
         js,
         host_permissions=["http://localhost:8000/*"],
+        background_js=_classification_background_script(),
     )
 
 
@@ -652,6 +733,7 @@ def _linkedin_page_filter(query: str, target_urls: list[str], name: str) -> dict
         "Filter LinkedIn result/feed cards with semantic matching.",
         js,
         host_permissions=["http://localhost:8000/*"],
+        background_js=_classification_background_script(),
     )
 
 

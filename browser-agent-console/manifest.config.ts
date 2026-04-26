@@ -3,14 +3,14 @@ import pkg from './package.json'
 
 export default defineManifest({
   manifest_version: 3,
-  name: pkg.name,
+  name: 'Layer',
   version: pkg.version,
   icons: {
-    48: 'public/logo.png',
+    48: 'public/layer-logo.png',
   },
   action: {
     default_icon: {
-      48: 'public/logo.png',
+      48: 'public/layer-logo.png',
     },
   },
   background: {

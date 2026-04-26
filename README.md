@@ -1,6 +1,6 @@
-# Browser Forge
+# Layer
 
-Browser Forge turns a plain-language browser customization request into a Chrome extension. The public entry point is an Agentverse agent that can be discovered and chatted with from ASI:One. The local backend does the work that a hosted chat agent should not do: write files, validate Manifest V3 projects, package artifacts, and hand the browser UI an install path.
+Layer turns a plain-language browser customization request into a Chrome extension. The public entry point is an Agentverse agent that can be discovered and chatted with from ASI:One. The local backend does the work that a hosted chat agent should not do: write files, validate Manifest V3 projects, package artifacts, and hand the browser UI an install path.
 
 The current demo flow is simple:
 
@@ -15,7 +15,7 @@ ASI:One or the Chrome side panel
 ## What is in this repo
 
 - `backend/`: FastAPI app, Agentverse/uAgents integration, extension generation helpers, validation, packaging, SQLite project storage.
-- `browser-agent-console/`: Chrome side panel extension built with React, TypeScript, Vite, and CRXJS.
+- `browser-agent-console/`: Layer Chrome side panel extension built with React, TypeScript, Vite, and CRXJS.
 - `backend/generated_extensions/`: local generated extension workspaces and ZIP artifacts. This directory is ignored by git.
 
 ## Agentverse and ASI:One

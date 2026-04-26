@@ -1,7 +1,7 @@
 // Shared message types and payload shapes between background/content/sidepanel.
 export const CLICKED_ELEMENTS_KEY = 'hoverHighlighterClickedElements'
-export const DOM_EDIT_ELEMENTS_KEY = 'browserForgeDomEditElements'
-export const DOM_EDIT_MODE_KEY = 'browserForgeDomEditMode'
+export const DOM_EDIT_ELEMENTS_KEY = 'layerDomEditElements'
+export const DOM_EDIT_MODE_KEY = 'layerDomEditMode'
 
 export const MESSAGE_TYPES = {
   getClicked: 'get-clicked-elements',

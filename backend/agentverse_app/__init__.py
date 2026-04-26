@@ -1,1 +1,1 @@
-"""Agentverse integration for Browser Forge."""
+"""Agentverse integration for Layer."""

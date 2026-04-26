@@ -1,4 +1,4 @@
-"""Register Browser Forge agents on Agentverse.
+"""Register Layer agents on Agentverse.
 
 Run after the agents are reachable from the public endpoint configured in
 PUBLIC_AGENT_BASE_URL:
@@ -18,11 +18,11 @@ from agentverse_app.config import settings
 
 AGENT_PROFILES = [
     {
-        "name": "Browser Orchestrator",
+        "name": "Layer Orchestrator",
         "seed": settings.orchestrator_seed,
         "path": "/submit",
         "readme": (
-            "# Browser Orchestrator\n\n"
+            "# Layer Orchestrator\n\n"
             "Coordinates specialist agents that turn browser customization intent "
             "into generated, validated Chrome extensions."
         ),

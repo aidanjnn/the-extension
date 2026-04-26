@@ -1,4 +1,4 @@
-"""Runnable Agentverse/uAgents app for Browser Forge.
+"""Runnable Agentverse/uAgents app for Layer.
 
 Run locally with:
     uv run python -m agentverse_app.main

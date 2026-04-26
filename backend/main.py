@@ -257,7 +257,7 @@ class DomEditOperationRequest(BaseModel):
 
 
 class DomEditExportRequest(BaseModel):
-    name: str = "Browser Forge DOM edits"
+    name: str = "Layer DOM edits"
     target_urls: list[str] = []
     operations: list[DomEditOperationRequest]
 
@@ -404,12 +404,12 @@ def _build_dom_edit_extension_files(req: DomEditExportRequest) -> dict[str, str]
             }
         )
 
-    name = _safe_filename(req.name, "Browser Forge DOM Edits").replace("_", " ")[:45]
+    name = _safe_filename(req.name, "Layer DOM Edits").replace("_", " ")[:45]
     manifest = {
         "manifest_version": 3,
         "name": name,
         "version": "1.0",
-        "description": "Persistent DOM edits exported from Browser Forge.",
+        "description": "Persistent DOM edits exported from Layer.",
         "content_scripts": [
             {
                 "matches": _target_urls_from_dom_request(req),
@@ -475,7 +475,7 @@ window.addEventListener('popstate', scheduleApply);
 window.addEventListener('hashchange', scheduleApply);
 """.strip()
     content_css = """
-/* Browser Forge DOM edits are applied inline by content.js so they win over page styles. */
+/* Layer DOM edits are applied inline by content.js so they win over page styles. */
 """.strip()
     return {
         "manifest.json": json.dumps(manifest, indent=2),

@@ -53,9 +53,10 @@ You are an expert Chrome extension engineer. You write Manifest V3 content-scrip
 extensions that perform precise DOM modifications on specific websites.
 
 You will receive a user request describing a browser customization. Your job is to \
-output a complete Chrome extension as JSON with exactly three files: manifest.json, \
-content.js, and content.css. content.js and content.css must both contain meaningful \
-implementation code; never leave either one empty.
+output a complete Chrome extension as JSON with manifest.json, content.js, and \
+content.css. content.js and content.css must both contain meaningful \
+implementation code; never leave either one empty. Classification tasks may also \
+include background.js via the optional background_js field.
 
 You may also receive retrieved implementation context. Treat it as DOM guidance, \
 safety constraints, and selector starting points. Adapt it to the exact user \
@@ -74,13 +75,14 @@ Critical rules:
    requestAnimationFrame if needed.
 5. Use CSS `:has()` selectors where supported for clean hide rules, but pair CSS \
    with JS so the extension also handles dynamic single-page app rerenders.
-6. Keep permissions minimal. content_scripts only — no service worker unless needed.
+6. Keep permissions minimal. content_scripts only — no service worker unless \
+   needed for semantic classification.
 7. The manifest description must be a plain string, no HTML.
 
-8. NEVER add `icons`, `web_accessible_resources`, `action`, `background`, or any \
-   field that references files you are not generating. You only generate three \
-   files: manifest.json, content.js, content.css. The manifest MUST NOT reference \
-   any other file. No PNG icons, no popup HTML, no service worker.
+8. NEVER add `icons`, `web_accessible_resources`, `action`, or any field that \
+   references files you are not generating. Only classification tasks may add \
+   `"background": {"service_worker": "background.js"}` and a matching \
+   `background_js` field. No PNG icons, no popup HTML.
 9. NEVER include `permissions` unless the content script genuinely needs them. \
    Most hide-this-element tasks need none. Use `host_permissions` ONLY when you \
    need to fetch the local classification backend (see rule 10).
@@ -89,15 +91,22 @@ CONTENT CLASSIFICATION TASKS:
 10. If the user's request requires deciding whether each item on the page matches \
    some semantic criterion ("only show sports videos", "hide political content", \
    "filter for tutorials"), you MUST NOT use hardcoded keyword lists or regex. \
-   Instead, generate code that calls the local classification backend at runtime:
+   Instead, generate code that calls the local classification backend at runtime \
+   through a Manifest V3 background service worker:
 
    - Add `"host_permissions": ["http://localhost:8000/*"]` to the manifest.
+   - Add `"background": {"service_worker": "background.js"}` to the manifest.
+   - Add a `"background_js"` source string that listens for \
+     `chrome.runtime.onMessage`, fetches `http://localhost:8000/api/classify`, \
+     and returns `{ok: true, matches: [...]}` through `sendResponse`.
    - In content.js, identify each candidate item element on the page and assign it \
      a stable id (extract from a video URL, data attribute, or generate one and \
      stash it in a WeakMap).
    - Collect each item's title text plus channel/source/description if available, \
      truncated to ~300 chars.
-   - Batch up to 30 items at a time and POST them to:
+   - Batch up to 30 items at a time and send them to background.js with \
+     `chrome.runtime.sendMessage`; do not call `fetch()` directly from content.js.
+   - background.js must POST to:
        POST http://localhost:8000/api/classify
        body: {"filter_description": "<user filter>", "items": [{"id": "...", "text": "..."}]}
        response: {"matches": ["id1", "id2", ...]}
@@ -115,11 +124,12 @@ CONTENT CLASSIFICATION TASKS:
     static CSS/JS — DO NOT call the classification backend. Classification is for \
     semantic content judgment, not for hiding known DOM regions.
 
-Output format: a single JSON object with exactly these keys:
+Output format: a single JSON object with these keys:
 {
   "manifest": { ... full manifest.json object ... },
   "content_js": "...full JS source...",
-  "content_css": "...full CSS source..."
+  "content_css": "...full CSS source...",
+  "background_js": "...optional MV3 service worker source for classification only..."
 }
 
 Output ONLY the JSON object, no prose, no markdown fences.
@@ -127,7 +137,7 @@ Output ONLY the JSON object, no prose, no markdown fences.
 
 
 def _strip_chip_html(text: str) -> str:
-    """Strip Browser Forge chip HTML markers from a query."""
+    """Strip Layer chip HTML markers from a query."""
     cleaned = re.sub(
         r"<!--EVOLVE_CHIP_START:[^>]*-->.*?<!--EVOLVE_CHIP_END-->",
         "",
@@ -218,11 +228,14 @@ async def _generate_with_llm(
     manifest = parsed.get("manifest")
     content_js = parsed.get("content_js")
     content_css = parsed.get("content_css", "")
+    background_js = parsed.get("background_js", "")
     if not isinstance(manifest, dict) or not isinstance(content_js, str):
         logger.warning("Codegen LLM output missing required keys")
         return None
     if not isinstance(content_css, str):
         content_css = ""
+    if not isinstance(background_js, str):
+        background_js = ""
 
     manifest.setdefault("manifest_version", 3)
     manifest.setdefault("version", "1.0")
@@ -241,7 +254,8 @@ async def _generate_with_llm(
         ]
 
     has_css = bool(content_css.strip())
-    _sanitize_manifest(manifest, has_css=has_css)
+    has_background = bool(background_js.strip())
+    _sanitize_manifest(manifest, has_css=has_css, has_background=has_background)
     for script in manifest.get("content_scripts") or []:
         if isinstance(script, dict):
             # Structural DOM modification extensions are more reliable at document_idle.
@@ -253,15 +267,21 @@ async def _generate_with_llm(
     }
     if has_css:
         files["content.css"] = content_css
+    if has_background:
+        files["background.js"] = background_js
     return files
 
 
-def _sanitize_manifest(manifest: dict[str, Any], *, has_css: bool) -> None:
+def _sanitize_manifest(manifest: dict[str, Any], *, has_css: bool, has_background: bool) -> None:
     """Strip any manifest fields that reference files we are not generating."""
     allowed_files = {"content.js"} | ({"content.css"} if has_css else set())
 
-    for key in ("icons", "web_accessible_resources", "action", "background", "options_page", "options_ui", "side_panel", "chrome_url_overrides", "devtools_page"):
+    for key in ("icons", "web_accessible_resources", "action", "options_page", "options_ui", "side_panel", "chrome_url_overrides", "devtools_page"):
         manifest.pop(key, None)
+    if has_background:
+        manifest["background"] = {"service_worker": "background.js"}
+    else:
+        manifest.pop("background", None)
 
     cleaned_scripts: list[dict[str, Any]] = []
     for script in manifest.get("content_scripts") or []:
@@ -305,6 +325,7 @@ def _quality_issues(
     manifest_raw = files.get("manifest.json", "")
     content_js = files.get("content.js", "")
     content_css = files.get("content.css", "")
+    background_js = files.get("background.js", "")
 
     if len(content_js.strip()) < 80:
         issues.append("content_js is empty or too small; implement meaningful runtime logic.")
@@ -331,7 +352,7 @@ def _quality_issues(
         issues.append("manifest content script must reference content.css when CSS is generated.")
     run_at = str(first_script.get("run_at", "document_idle")).lower()
 
-    combined = f"{content_js}\n{content_css}".lower()
+    combined = f"{content_js}\n{content_css}\n{background_js}".lower()
     if re.search(r"\[class\*=['\"][^'\"]+['\"]\s+i?\]", combined):
         issues.append("Do not use broad class substring selectors like [class*=...].")
     if "document.body.style" in combined or "document.documentelement.style" in combined:
@@ -405,8 +426,24 @@ def _quality_issues(
             issues.append(f"Use-case '{entry.get('title')}' should inject a small DOM marker/banner.")
         if behavior == "collapse" and not _has_collapse_behavior(combined):
             issues.append(f"Use-case '{entry.get('title')}' should collapse/expand comment bodies safely.")
-        if behavior == "classify" and "/api/classify" not in combined:
-            issues.append(f"Use-case '{entry.get('title')}' should use /api/classify for semantic matching.")
+        if behavior == "classify":
+            background = manifest.get("background") if isinstance(manifest, dict) else None
+            service_worker = background.get("service_worker") if isinstance(background, dict) else None
+            host_permissions = manifest.get("host_permissions") or []
+            if "/api/classify" not in combined:
+                issues.append(f"Use-case '{entry.get('title')}' should use /api/classify for semantic matching.")
+            if service_worker != "background.js" or not background_js.strip():
+                issues.append(
+                    f"Use-case '{entry.get('title')}' should proxy classification through background.js."
+                )
+            if "chrome.runtime.sendmessage" not in content_js.lower():
+                issues.append(
+                    f"Use-case '{entry.get('title')}' content script should send classification batches to background.js."
+                )
+            if not any("localhost:8000" in str(permission) for permission in host_permissions):
+                issues.append(
+                    f"Use-case '{entry.get('title')}' manifest should grant localhost classifier host_permissions."
+                )
         if rule.get("require_mutation_observer") and "mutationobserver" not in combined:
             issues.append(f"Use-case '{entry.get('title')}' must include MutationObserver for SPA rerenders.")
 
