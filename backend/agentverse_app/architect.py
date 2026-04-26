@@ -7,6 +7,16 @@ import re
 from agentverse_app.messages import ArchitectRequest, ArchitectResult, ExtensionSpec
 
 
+def _strip_chip_html(text: str) -> str:
+    cleaned = re.sub(
+        r"<!--EVOLVE_CHIP_START:[^>]*-->.*?<!--EVOLVE_CHIP_END-->",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _infer_target_urls(query: str, active_tabs: list[dict]) -> list[str]:
     lowered = query.lower()
     if "instagram" in lowered:
@@ -35,12 +45,13 @@ def _extension_name(query: str) -> str:
 
 async def run_architect(request: ArchitectRequest) -> ArchitectResult:
     build = request.build
-    target_urls = _infer_target_urls(build.query, build.active_tabs)
+    clean_query = _strip_chip_html(build.query)
+    target_urls = _infer_target_urls(clean_query, build.active_tabs)
     spec = ExtensionSpec(
         job_id=build.job_id,
         project_id=build.project_id,
-        name=_extension_name(build.query),
-        description=f"Generated extension for: {build.query}",
+        name=_extension_name(clean_query),
+        description=f"Generated extension for: {clean_query}"[:200],
         target_urls=target_urls,
         files_needed=["manifest.json", "content.js", "content.css"],
         behavior=build.query,

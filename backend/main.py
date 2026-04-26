@@ -180,6 +180,89 @@ async def delete_project_route(project_id: str):
 # --- Extension Loading ---
 
 
+class ClassifyItem(BaseModel):
+    id: str
+    text: str
+
+
+class ClassifyRequest(BaseModel):
+    filter_description: str
+    items: list[ClassifyItem]
+    provider: str = "gemini"
+
+
+class ClassifyResponse(BaseModel):
+    matches: list[str]
+
+
+@app.post("/api/classify", response_model=ClassifyResponse)
+async def classify(req: ClassifyRequest):
+    """Classify a batch of items against a user-supplied filter description.
+
+    Used by generated browser extensions to do semantic content filtering
+    (e.g. "show only sports videos") without hardcoded keyword lists.
+    """
+    import json as _json
+
+    items = [item for item in req.items if item.text.strip()]
+    if not items:
+        return ClassifyResponse(matches=[])
+
+    client = get_secondary_client(req.provider)
+    model = get_secondary_model(req.provider)
+
+    numbered = "\n".join(f"{i.id}: {i.text[:300]}" for i in items)
+    system_prompt = (
+        "You are a content filter. The user gives you a filter description and a list "
+        "of items, each prefixed with an id and a colon. Return JSON: "
+        '{"matches": ["id1", "id2", ...]} listing ONLY the ids whose content matches '
+        "the filter description. Do not include any other text."
+    )
+    user_prompt = (
+        f"Filter description: {req.filter_description}\n\n"
+        f"Items:\n{numbered}\n\n"
+        'Return JSON: {"matches": [...ids that match...]}'
+    )
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+        )
+    except Exception as exc:
+        logger.warning("Classify call failed: %s", exc)
+        return ClassifyResponse(matches=[])
+
+    raw = (response.choices[0].message.content or "").strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:]
+    try:
+        parsed = _json.loads(raw)
+    except _json.JSONDecodeError:
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if not m:
+            return ClassifyResponse(matches=[])
+        try:
+            parsed = _json.loads(m.group(0))
+        except _json.JSONDecodeError:
+            return ClassifyResponse(matches=[])
+
+    matches_raw = parsed.get("matches") if isinstance(parsed, dict) else None
+    if not isinstance(matches_raw, list):
+        return ClassifyResponse(matches=[])
+    valid_ids = {item.id for item in items}
+    return ClassifyResponse(
+        matches=[str(m) for m in matches_raw if str(m) in valid_ids]
+    )
+
+
 @app.post("/api/load-extension/{project_id}")
 async def api_load_extension(project_id: str):
     """Trigger OS automation to load the extension into Chrome."""
