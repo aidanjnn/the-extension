@@ -8,12 +8,14 @@ from uuid import uuid4
 from agentverse_app import backend_client
 from agentverse_app.architect import run_architect
 from agentverse_app.codegen import run_codegen
+from agentverse_app.config import settings
 from agentverse_app.messages import (
     AgentStepResult,
     ArchitectRequest,
     CodegenRequest,
     ExtensionBuildRequest,
     ExtensionBuildResult,
+    ExtensionSpec,
     PackageRequest,
     RagRequest,
     ValidationRequest,
@@ -49,16 +51,49 @@ def _step(agent_name: str, summary: str, payload: dict | None = None) -> AgentSt
     )
 
 
-def _final_message(result: ExtensionBuildResult) -> str:
+def _download_url(project_id: str) -> str | None:
+    base = settings.public_backend_base_url.rstrip("/")
+    if not base:
+        return None
+    return f"{base}/download/{project_id}.zip"
+
+
+def _final_message(result: ExtensionBuildResult, spec: ExtensionSpec) -> str:
+    name = spec.name or "Browser Forge Extension"
+    targets = ", ".join(spec.target_urls) or "the active tab"
+    download = _download_url(result.project_id)
+
     step_lines = "\n".join(
-        f"{step.agent_name}: {step.summary}" for step in result.steps
+        f"- **{step.agent_name}** — {step.summary}" for step in result.steps
     )
+
+    if download:
+        install_block = (
+            "### Install in 3 steps\n\n"
+            f"1. **Download** → [{name}.zip]({download})\n"
+            "2. Open `chrome://extensions` and turn on **Developer mode** (top-right)\n"
+            "3. Click **Load unpacked** and select the unzipped folder\n"
+        )
+    else:
+        install_block = (
+            "### Install in 3 steps\n\n"
+            "1. Locate the generated extension folder on the host machine:\n"
+            f"   `{result.package.extension_path}`\n"
+            "2. Open `chrome://extensions` and turn on **Developer mode**\n"
+            "3. Click **Load unpacked** and select that folder\n"
+        )
+
+    validation_line = (
+        f"\n**Validation:** {result.validation.summary}\n" if result.validation else ""
+    )
+
     return (
-        "Extension ready through Agentverse coordination.\n\n"
-        f"{step_lines}\n\n"
-        f"Validation: {result.validation.summary}\n"
-        f"Extension path: {result.package.extension_path}\n"
-        f"Load instructions: {result.package.load_instructions}"
+        f"**{name}** is ready to install.\n\n"
+        f"### Built through Agentverse\n\n"
+        f"{step_lines}\n"
+        f"{validation_line}\n"
+        f"{install_block}\n"
+        f"_Active on:_ `{targets}`"
     )
 
 
@@ -94,7 +129,7 @@ async def run_orchestrator(build: ExtensionBuildRequest) -> ExtensionBuildResult
         validation=validation,
         package=package,
     )
-    result.final_message = _final_message(result)
+    result.final_message = _final_message(result, architect.spec)
     return result
 
 
@@ -153,5 +188,5 @@ async def stream_orchestrator_events(
         validation=validation,
         package=package,
     )
-    result.final_message = _final_message(result)
+    result.final_message = _final_message(result, architect.spec)
     yield {"type": "content", "content": result.final_message}

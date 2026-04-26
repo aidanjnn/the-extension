@@ -1,10 +1,13 @@
 import asyncio
+import json
 import logging
+import re
 import shutil
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from agentverse_app.config import settings as agentverse_settings
@@ -175,6 +178,49 @@ async def delete_project_route(project_id: str):
     if workspace.exists():
         shutil.rmtree(workspace)
     return {"ok": True}
+
+
+# --- Public Extension Download ---
+
+
+def _safe_filename(name: str, fallback: str) -> str:
+    cleaned = re.sub(r"[^\w\s-]", "", name).strip()
+    cleaned = re.sub(r"\s+", "_", cleaned)
+    return cleaned or fallback
+
+
+@app.get("/download/{project_id}.zip")
+async def download_extension(project_id: str):
+    """Public endpoint that serves the packaged extension zip.
+
+    Used by ASI:One/Agentverse chat replies so users can download the
+    generated extension directly. The downloaded file is renamed using the
+    extension's manifest name (e.g. ``Hide_Instagram_Reels.zip``).
+    """
+    legacy_base = DEMO_CODE_BASE.parent / "demo_code"
+    artifact_base = DEMO_CODE_BASE
+    artifact = artifact_base / "_artifacts" / f"{project_id}.zip"
+    if not artifact.exists():
+        legacy_artifact = legacy_base / "_artifacts" / f"{project_id}.zip"
+        if not legacy_artifact.exists():
+            raise HTTPException(status_code=404, detail="Extension not found")
+        artifact_base = legacy_base
+        artifact = legacy_artifact
+
+    display_name = project_id
+    manifest_path = artifact_base / project_id / "manifest.json"
+    if manifest_path.exists():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            display_name = data.get("name", project_id) or project_id
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return FileResponse(
+        artifact,
+        media_type="application/zip",
+        filename=f"{_safe_filename(display_name, project_id)}.zip",
+    )
 
 
 # --- Extension Loading ---
