@@ -321,7 +321,7 @@ sidePanelApi.onStateChanged?.addListener((state: SidePanelState) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id ?? message?.tabId
 
-  // Re-pin Layer as a side panel from the floating overlay.
+  // Re-pin the extension as a side panel from the floating overlay.
   if (message?.type === 'bf:open-sidepanel') {
     chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
       if (tab?.windowId !== undefined) {

@@ -1,4 +1,4 @@
-"""Runnable Agentverse/uAgents app for Layer.
+"""Runnable Agentverse/uAgents app for the extension.
 
 Run locally with:
     uv run python -m agentverse_app.main

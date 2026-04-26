@@ -112,7 +112,7 @@ function scheduleApply() {{
     try {{
       applyRules();
     }} catch (err) {{
-      console.debug('Layer applyRules failed', err);
+      console.debug('the extension applyRules failed', err);
     }}
   }});
 }}
@@ -975,19 +975,32 @@ def _x_engagement_bait(query: str, target_urls: list[str], name: str) -> dict[st
   if (!/\\/status\\/\\d+/.test(location.pathname)) return;
 
   const primaryColumn = document.querySelector('[data-testid="primaryColumn"]') || document;
-  const articles = Array.from(primaryColumn.querySelectorAll('article[data-testid="tweet"], article'));
-  const replies = articles.slice(1);
-  replies.forEach((article) => {
-    if (!(article instanceof Element)) return;
+  const tweetCells = Array.from(primaryColumn.querySelectorAll('[data-testid="cellInnerDiv"]'))
+    .map((cell) => ({ cell, article: getOwnTweetArticle(cell) }))
+    .filter((item) => item.article);
+
+  tweetCells.slice(1).forEach(({ cell, article }) => {
     if (!hasVerifiedBadge(article)) return;
     const likeCount = getLikeCount(article);
     if (likeCount >= 100) return;
-    const cell = article.closest('[data-testid="cellInnerDiv"]') || article;
-    cell.setAttribute('data-bf-engagement-bait-removed', '1');
-    cell.remove();
+    hideEngagementBaitCell(cell);
   });
 """,
         """
+function getOwnTweetArticle(cell) {
+  if (!(cell instanceof Element)) return null;
+  const article = cell.querySelector('article[data-testid="tweet"], article');
+  if (!(article instanceof Element)) return null;
+  return article.closest('[data-testid="cellInnerDiv"]') === cell ? article : null;
+}
+
+function hideEngagementBaitCell(cell) {
+  if (!(cell instanceof Element)) return;
+  cell.dataset.bfEngagementBaitRemoved = '1';
+  cell.setAttribute('aria-hidden', 'true');
+  cell.classList.add(HIDDEN_CLASS, 'bf-x-engagement-bait-hidden');
+}
+
 function compactNumberToInt(raw, suffix) {
   const value = Number(String(raw || '').replace(/,/g, ''));
   if (!Number.isFinite(value)) return 0;
@@ -1025,7 +1038,13 @@ function hasVerifiedBadge(article) {
 }
 """,
     )
-    return _files(name, target_urls, "Remove low-like verified X replies on tweet threads.", js)
+    css = _base_css() + """
+
+.bf-x-engagement-bait-hidden {
+  display: none !important;
+}
+""".rstrip()
+    return _files(name, target_urls, "Remove low-like verified X replies on tweet threads.", js, css)
 
 
 def _amazon_descammer(query: str, target_urls: list[str], name: str) -> dict[str, str]:
@@ -1107,6 +1126,20 @@ def _netflix_roulette(query: str, target_urls: list[str], name: str) -> dict[str
         """
 const ROULETTE_BUTTON_ID = 'bf-netflix-roulette-button';
 const ROULETTE_FALLBACK_ID = 'bf-netflix-roulette-fallback';
+const NETFLIX_FALLBACK_TITLE_IDS = [
+  '80057281',
+  '70264888',
+  '81231974',
+  '81040344',
+  '80232398',
+  '80025678',
+  '80025172',
+  '80117552',
+  '81435684',
+  '81054853',
+  '80217863',
+  '80189685',
+];
 
 function findControlsContainer() {
   const selectors = [
@@ -1137,57 +1170,56 @@ function visibleElement(el) {
   return rect.width > 20 && rect.height > 20;
 }
 
-function playableCardsInside(root) {
-  const selectors = [
-    '.episode-item',
-    '[data-uia*="episode" i]',
-    '.titleCard',
-    '.slider-item',
-    'a[href*="/watch/"]',
-    'button[data-uia*="play" i]',
-  ].join(',');
-  return Array.from(root.querySelectorAll(selectors)).filter((node) => {
-    if (!(node instanceof HTMLElement)) return false;
-    if (!visibleElement(node)) return false;
-    const disabled = node.getAttribute('aria-disabled') === 'true' || node.hasAttribute('disabled');
-    return !disabled;
+function titleIdFromUrl(url) {
+  const match = url.pathname.match(/\\/title\\/(\\d+)/);
+  return match ? match[1] : '';
+}
+
+function randomIndex(length) {
+  if (length <= 1) return 0;
+  const values = new Uint32Array(1);
+  crypto.getRandomValues(values);
+  return values[0] % length;
+}
+
+function isFeaturedOrHeroLink(anchor) {
+  return Boolean(anchor.closest([
+    '.billboard',
+    '.billboard-row',
+    '.volatile-billboard-animations-container',
+    '.jawBone',
+    '.previewModal',
+    '.bob-card',
+    '[data-uia*="billboard" i]',
+    '[data-uia*="hero" i]',
+  ].join(',')));
+}
+
+function randomTitleLinks() {
+  const byTitleId = new Map();
+  document.querySelectorAll('a[href*="/title/"]').forEach((anchor) => {
+    if (!(anchor instanceof HTMLAnchorElement)) return;
+    if (anchor.closest(`#${ROULETTE_FALLBACK_ID}`)) return;
+    if (isFeaturedOrHeroLink(anchor)) return;
+    let url;
+    try {
+      url = new URL(anchor.getAttribute('href') || anchor.href, location.origin);
+    } catch {
+      return;
+    }
+    const titleId = titleIdFromUrl(url);
+    if (!titleId || byTitleId.has(titleId)) return;
+    byTitleId.set(titleId, `${location.origin}/title/${titleId}`);
   });
+  const loadedTitles = Array.from(byTitleId.values());
+  if (loadedTitles.length >= 2) return loadedTitles;
+  return NETFLIX_FALLBACK_TITLE_IDS.map((titleId) => `${location.origin}/title/${titleId}`);
 }
 
-function firstEpisodeOptions() {
-  const rows = Array.from(document.querySelectorAll(
-    '.lolomoRow, .slider, .episodeSelector, [data-list-context], [data-uia*="section" i], [data-uia*="episodes" i]'
-  ));
-  const rowFirstCards = rows
-    .map((row) => playableCardsInside(row)[0])
-    .filter(Boolean);
-  if (rowFirstCards.length > 0) return rowFirstCards;
-  return playableCardsInside(document);
-}
-
-function clickLikeHuman(target) {
-  target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
-  const rect = target.getBoundingClientRect();
-  const init = {
-    bubbles: true,
-    cancelable: true,
-    view: window,
-    clientX: rect.left + rect.width / 2,
-    clientY: rect.top + rect.height / 2,
-  };
-  target.dispatchEvent(new PointerEvent('pointerdown', init));
-  target.dispatchEvent(new MouseEvent('mousedown', init));
-  target.dispatchEvent(new PointerEvent('pointerup', init));
-  target.dispatchEvent(new MouseEvent('mouseup', init));
-  target.dispatchEvent(new MouseEvent('click', init));
-  target.click?.();
-}
-
-function launchRandomFirstEpisode() {
-  const options = firstEpisodeOptions();
+function launchRandomShow() {
+  const options = randomTitleLinks();
   if (options.length === 0) return;
-  const index = Math.floor(Math.random() * options.length);
-  clickLikeHuman(options[index]);
+  location.assign(options[randomIndex(options.length)]);
 }
 
 function injectRouletteButton() {
@@ -1198,12 +1230,13 @@ function injectRouletteButton() {
   button.id = ROULETTE_BUTTON_ID;
   button.type = 'button';
   button.className = 'bf-netflix-roulette-btn';
-  button.setAttribute('aria-label', 'Play a random first episode');
-  button.textContent = 'Random Episode';
+  button.setAttribute('aria-label', 'Open a random Netflix show');
+  button.dataset.bfRouletteIntent = 'random episode random show';
+  button.textContent = 'Random Show';
   button.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    launchRandomFirstEpisode();
+    launchRandomShow();
   });
   host.appendChild(button);
 }
@@ -1261,7 +1294,7 @@ function injectRouletteButton() {
   margin-left: 0 !important;
 }
 """.strip()
-    return _files(name, target_urls, "Inject a native-looking Netflix random episode button.", js, css)
+    return _files(name, target_urls, "Inject a native-looking Netflix random show button.", js, css)
 
 
 def _doomscroll_guillotine(query: str, target_urls: list[str], name: str) -> dict[str, str]:
@@ -1484,30 +1517,130 @@ html.bf-youtube-clickbait-nuke ytd-thumbnail {
 def _youtube_absolute_focus(query: str, target_urls: list[str], name: str) -> dict[str, str]:
     js = _runtime_wrapper(
         """
-  document.documentElement.classList.add('bf-youtube-absolute-focus');
-  const videoCards = document.querySelectorAll(
-    'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer'
-  );
-  videoCards.forEach((card) => {
-    const thumbnail = card.querySelector('ytd-thumbnail a#thumbnail[href*="/watch"], a#thumbnail[href*="/watch"]');
-    if (thumbnail) {
-      card.classList.add('bf-video-card');
-    } else {
-      hideNode(card);
-    }
-  });
+  installAbsoluteFocusGrid();
+""",
+        """
+const YOUTUBE_FOCUS_GRID_ID = 'bf-youtube-focus-grid';
+const YOUTUBE_FOCUS_SEEN = new Set();
 
+function watchInfoFromHref(href) {
+  let url;
+  try {
+    url = new URL(href, location.origin);
+  } catch {
+    return null;
+  }
+  if (!url.pathname.startsWith('/watch')) return null;
+  const videoId = url.searchParams.get('v');
+  if (!videoId) return null;
+  return {
+    id: videoId,
+    href: `https://www.youtube.com/watch?v=${videoId}`,
+  };
+}
+
+function fallbackThumbnail(videoId) {
+  return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+}
+
+function thumbnailFromCard(card, videoId) {
+  const img = card.querySelector('img.yt-core-image, yt-image img, img');
+  const src = img?.currentSrc || img?.src || img?.getAttribute?.('src') || '';
+  if (src && !src.startsWith('data:')) return src;
+  return fallbackThumbnail(videoId);
+}
+
+function titleFromCard(card, anchor) {
+  const titleNode = card.querySelector('#video-title, h3, [aria-label]');
+  return (
+    titleNode?.getAttribute?.('aria-label') ||
+    titleNode?.getAttribute?.('title') ||
+    titleNode?.textContent ||
+    anchor.getAttribute('aria-label') ||
+    'YouTube video'
+  ).trim();
+}
+
+function collectFocusVideos() {
+  const anchors = Array.from(document.querySelectorAll(
+    'ytd-thumbnail a#thumbnail[href*="/watch"], a#thumbnail[href*="/watch"], a[href*="/watch?v="]'
+  ));
+  const videos = [];
+  anchors.forEach((anchor) => {
+    if (!(anchor instanceof HTMLAnchorElement)) return;
+    if (anchor.closest(`#${YOUTUBE_FOCUS_GRID_ID}`)) return;
+    const info = watchInfoFromHref(anchor.getAttribute('href') || anchor.href);
+    if (!info || YOUTUBE_FOCUS_SEEN.has(info.id)) return;
+    const card =
+      anchor.closest('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer') ||
+      anchor;
+    videos.push({
+      id: info.id,
+      href: info.href,
+      title: titleFromCard(card, anchor),
+      thumbnail: thumbnailFromCard(card, info.id),
+    });
+  });
+  return videos;
+}
+
+function ensureFocusGrid() {
+  let grid = document.getElementById(YOUTUBE_FOCUS_GRID_ID);
+  if (!grid) {
+    grid = document.createElement('main');
+    grid.id = YOUTUBE_FOCUS_GRID_ID;
+    grid.setAttribute('aria-label', 'YouTube focus video grid');
+    grid.addEventListener('scroll', installAbsoluteFocusGrid, { passive: true });
+    document.body?.prepend(grid);
+  }
+  return grid;
+}
+
+function appendFocusTile(grid, video) {
+  YOUTUBE_FOCUS_SEEN.add(video.id);
+  const tile = document.createElement('a');
+  tile.className = 'bf-youtube-focus-tile';
+  tile.href = video.href;
+  tile.dataset.videoId = video.id;
+  tile.title = video.title;
+
+  const img = document.createElement('img');
+  img.alt = video.title;
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.src = video.thumbnail;
+  tile.appendChild(img);
+  grid.appendChild(tile);
+}
+
+function installAbsoluteFocusGrid() {
+  const grid = ensureFocusGrid();
+  collectFocusVideos().forEach((video) => appendFocusTile(grid, video));
+  const ready = grid.children.length > 0;
+  grid.dataset.ready = ready ? '1' : '0';
+  document.documentElement.classList.toggle('bf-youtube-absolute-focus', ready);
+  document.body?.classList.toggle('bf-youtube-absolute-focus', ready);
+  if (!ready) return;
   document.querySelectorAll(
     '#masthead-container, ytd-masthead, ytd-guide-renderer, ytd-mini-guide-renderer, #guide, #chips-wrapper, ytd-feed-filter-chip-bar-renderer, ytd-reel-shelf-renderer, ytd-rich-section-renderer, ytd-comments, #comments, ytd-watch-next-secondary-results-renderer, #secondary, ytd-merch-shelf-renderer'
-  ).forEach((node) => hideNode(node));
+  ).forEach((node) => node.setAttribute('data-bf-native-youtube-hidden', '1'));
+}
+
+window.addEventListener('scroll', installAbsoluteFocusGrid, { passive: true });
+window.addEventListener('resize', installAbsoluteFocusGrid, { passive: true });
 """,
     )
     css = """
 html.bf-youtube-absolute-focus,
 html.bf-youtube-absolute-focus body {
   background: #000 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow-x: hidden !important;
+  overflow-y: hidden !important;
 }
 
+html.bf-youtube-absolute-focus tp-yt-app-drawer,
 html.bf-youtube-absolute-focus #masthead-container,
 html.bf-youtube-absolute-focus ytd-masthead,
 html.bf-youtube-absolute-focus ytd-guide-renderer,
@@ -1522,9 +1655,6 @@ html.bf-youtube-absolute-focus #comments,
 html.bf-youtube-absolute-focus #secondary,
 html.bf-youtube-absolute-focus ytd-watch-next-secondary-results-renderer,
 html.bf-youtube-absolute-focus ytd-merch-shelf-renderer,
-html.bf-youtube-absolute-focus ytd-continuation-item-renderer,
-html.bf-youtube-absolute-focus tp-yt-app-drawer,
-html.bf-youtube-absolute-focus ytd-mini-guide-renderer,
 html.bf-youtube-absolute-focus #header,
 html.bf-youtube-absolute-focus h1,
 html.bf-youtube-absolute-focus h2,
@@ -1532,85 +1662,56 @@ html.bf-youtube-absolute-focus h3 {
   display: none !important;
 }
 
-html.bf-youtube-absolute-focus ytd-page-manager,
-html.bf-youtube-absolute-focus ytd-browse,
-html.bf-youtube-absolute-focus ytd-two-column-browse-results-renderer,
-html.bf-youtube-absolute-focus ytd-rich-grid-renderer,
-html.bf-youtube-absolute-focus #contents.ytd-rich-grid-renderer,
-html.bf-youtube-absolute-focus ytd-section-list-renderer,
-html.bf-youtube-absolute-focus ytd-item-section-renderer,
-html.bf-youtube-absolute-focus ytd-search {
-  margin: 0 !important;
-  max-width: none !important;
-  padding: 0 !important;
-  width: 100% !important;
-}
-
-html.bf-youtube-absolute-focus ytd-rich-grid-renderer {
-  --ytd-rich-grid-items-per-row: 6 !important;
-  --ytd-rich-grid-item-margin: 0 !important;
-}
-
-html.bf-youtube-absolute-focus #contents.ytd-rich-grid-renderer,
-html.bf-youtube-absolute-focus ytd-rich-grid-row,
-html.bf-youtube-absolute-focus ytd-section-list-renderer #contents,
-html.bf-youtube-absolute-focus ytd-item-section-renderer #contents {
+#bf-youtube-focus-grid {
+  align-items: start !important;
+  background: #000 !important;
   display: grid !important;
   gap: 0 !important;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
-  align-items: start !important;
-}
-
-html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card,
-html.bf-youtube-absolute-focus ytd-video-renderer.bf-video-card,
-html.bf-youtube-absolute-focus ytd-grid-video-renderer.bf-video-card,
-html.bf-youtube-absolute-focus ytd-compact-video-renderer.bf-video-card {
-  display: block !important;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)) !important;
+  height: 100vh !important;
+  inset: 0 !important;
   margin: 0 !important;
-  max-width: none !important;
+  min-height: 100vh !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
   padding: 0 !important;
-  width: 100% !important;
+  position: fixed !important;
+  width: 100vw !important;
+  z-index: 2147483000 !important;
 }
 
-html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #details,
-html.bf-youtube-absolute-focus ytd-video-renderer.bf-video-card #details,
-html.bf-youtube-absolute-focus ytd-grid-video-renderer.bf-video-card #details,
-html.bf-youtube-absolute-focus ytd-compact-video-renderer.bf-video-card #details,
-html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #metadata,
-html.bf-youtube-absolute-focus ytd-video-renderer.bf-video-card #metadata,
-html.bf-youtube-absolute-focus ytd-grid-video-renderer.bf-video-card #metadata,
-html.bf-youtube-absolute-focus ytd-compact-video-renderer.bf-video-card #metadata,
-html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #dismissible > #avatar,
-html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card ytd-channel-name,
-html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #video-title,
-html.bf-youtube-absolute-focus ytd-rich-item-renderer.bf-video-card #metadata-line {
+#bf-youtube-focus-grid[data-ready="0"] {
   display: none !important;
 }
 
-html.bf-youtube-absolute-focus ytd-thumbnail,
-html.bf-youtube-absolute-focus ytd-thumbnail a#thumbnail,
-html.bf-youtube-absolute-focus ytd-thumbnail img,
-html.bf-youtube-absolute-focus ytd-thumbnail yt-image,
-html.bf-youtube-absolute-focus ytd-thumbnail .yt-core-image {
+.bf-youtube-focus-tile {
+  aspect-ratio: 16 / 9 !important;
+  background: #000 !important;
+  border: 0 !important;
   border-radius: 0 !important;
   display: block !important;
-  height: auto !important;
+  margin: 0 !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  position: relative !important;
+  text-decoration: none !important;
+}
+
+.bf-youtube-focus-tile img {
+  border: 0 !important;
+  border-radius: 0 !important;
+  display: block !important;
+  height: 100% !important;
   margin: 0 !important;
   object-fit: cover !important;
   padding: 0 !important;
   width: 100% !important;
 }
 
-html.bf-youtube-absolute-focus ytd-thumbnail a#thumbnail {
-  aspect-ratio: 16 / 9 !important;
-  background: #000 !important;
-  overflow: hidden !important;
-}
-
-html.bf-youtube-absolute-focus ytd-watch-flexy #primary {
-  margin: 0 !important;
-  max-width: 100% !important;
-  padding: 0 !important;
+.bf-youtube-focus-tile:focus-visible {
+  outline: 3px solid #fff !important;
+  outline-offset: -3px !important;
 }
 """.strip()
     return _files(name, target_urls, "Turn YouTube into a thumbnail-only focus grid.", js, css)

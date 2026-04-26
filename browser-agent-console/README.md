@@ -1,6 +1,6 @@
 # Browser Agent Console
 
-This is the Chrome-side UI for Layer. It opens the side panel, captures page context, records console output from the active tab, and sends chat requests to the local backend.
+This is the Chrome-side UI for the extension. It opens the side panel, captures page context, records console output from the active tab, and sends chat requests to the local backend.
 
 ## Run it
 

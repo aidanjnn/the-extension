@@ -144,7 +144,7 @@ Output ONLY the JSON object, no prose, no markdown fences.
 
 
 def _strip_chip_html(text: str) -> str:
-    """Strip Layer chip HTML markers from a query."""
+    """Strip the extension chip HTML markers from a query."""
     cleaned = re.sub(
         r"<!--EVOLVE_CHIP_START:[^>]*-->.*?<!--EVOLVE_CHIP_END-->",
         "",

@@ -518,7 +518,7 @@ function AgentRunVisualizer({
         </span>
         <span className="agent-viz-progress">{statusLabel}</span>
       </div>
-      <div className={`agent-viz-canvas active-${focusStage.id}`} aria-label="Layer agent build visualization">
+      <div className={`agent-viz-canvas active-${focusStage.id}`} aria-label="the extension agent build visualization">
         <div className="agent-run-progress" aria-hidden="true">
           <span className="agent-run-progress-fill" style={{ width: progressWidth }} />
         </div>
@@ -694,7 +694,7 @@ function ThinkingBlock({
   )
 }
 
-// Function injected into the active web page to render Layer as a
+// Function injected into the active web page to render the extension as a
 // draggable floating overlay (Dia-style: no browser chrome, sits above page).
 // Must be self-contained — runs in page context via chrome.scripting.executeScript.
 function injectFloatingOverlay(iframeUrl: string) {
@@ -2570,7 +2570,7 @@ export default function App() {
       const res = await fetch(`${API_URL}/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Layer' }),
+        body: JSON.stringify({ name: 'the extension' }),
       })
       if (res.ok) {
         const project: Project = await res.json()
@@ -3323,7 +3323,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: activeProject?.name ? `${activeProject.name} DOM edits` : 'Layer DOM edits',
+          name: activeProject?.name ? `${activeProject.name} DOM edits` : 'the extension DOM edits',
           target_urls: targetUrlPatternsForDomEdits(),
           operations: domEdits,
         }),
@@ -3457,9 +3457,9 @@ export default function App() {
               <path d="m17 3 4 4-9.5 9.5L7 17l.5-4.5L17 3z" />
             </svg>
           </button>
-          <h1><LayerLogo className="header-logo" size={18} />Layer</h1>
+          <h1><LayerLogo className="header-logo" size={18} />the extension</h1>
           <div className="header-actions">
-            <div className="app-mode-toggle" role="tablist" aria-label="Layer mode">
+            <div className="app-mode-toggle" role="tablist" aria-label="the extension mode">
               <button
                 type="button"
                 role="tab"
@@ -3659,13 +3659,13 @@ export default function App() {
                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                   </svg>
                   <LayerLogo size={14} />
-                  <span>Layer</span>
+                  <span>the extension</span>
                 </div>
                 <div className="preview-card-quote">
                   "Hide YouTube Shorts so I can focus."
                 </div>
               </div>
-              <div className="empty-canvas-title">Starting Layer</div>
+              <div className="empty-canvas-title">Starting the extension</div>
               <div className="empty-canvas-hint">Preparing your chat workspace…</div>
             </div>
           )}
@@ -3677,7 +3677,7 @@ export default function App() {
                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                   </svg>
                   <LayerLogo size={14} />
-                  <span>Layer</span>
+                  <span>the extension</span>
                 </div>
                 <div className="preview-card-quote">
                   "Hide YouTube Shorts so I can focus."

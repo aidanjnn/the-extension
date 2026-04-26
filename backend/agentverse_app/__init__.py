@@ -1,1 +1,1 @@
-"""Agentverse integration for Layer."""
+"""Agentverse integration for the extension."""

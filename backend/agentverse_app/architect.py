@@ -120,7 +120,7 @@ def _cap(word: str) -> str:
 def _extension_name(query: str) -> str:
     words = re.findall(r"[a-zA-Z]+", query.lower())
     if not words:
-        return "Layer Extension"
+        return "the extension"
 
     action = next((w for w in words if w in _ACTION_WORDS), None)
     site = next((w for w in words if w in _SITE_WORDS), None)
@@ -132,7 +132,7 @@ def _extension_name(query: str) -> str:
 
     meaningful = [w for w in words if w not in _STOP_WORDS and len(w) > 1]
     if not meaningful:
-        return "Layer Extension"
+        return "the extension"
 
     return " ".join(_cap(w) for w in meaningful[:4])
 

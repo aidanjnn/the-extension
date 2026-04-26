@@ -3,7 +3,7 @@ import pkg from './package.json'
 
 export default defineManifest({
   manifest_version: 3,
-  name: 'Layer',
+  name: 'the extension',
   version: pkg.version,
   icons: {
     48: 'public/layer-logo.png',

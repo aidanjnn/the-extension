@@ -4,7 +4,7 @@ import { setHoverHighlighterEnabled, startHoverHighlighter } from './highlighter
 import { MESSAGE_TYPES } from '../shared/messages'
 import App from './views/App.tsx'
 
-console.log('[Layer] content script loaded')
+console.log('[the extension] content script loaded')
 
 const CONSOLE_LEVELS = ['log', 'info', 'warn', 'error', 'debug'] as const
 type ConsoleLevel = (typeof CONSOLE_LEVELS)[number]
