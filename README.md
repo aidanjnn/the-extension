@@ -6,9 +6,9 @@
 
 It also has an **Edit DOM mode**: hold ⌘, hover any element on a webpage, click to select it, and tell the agent things like "make this 30% wider," "hide it," "move it to the top," or "change the text to 'inbox zero'." Watch the page change live. When you're happy with the edits, one button exports them as a permanent Chrome extension that re-applies your changes every time you visit that site.
 
-- 🌐 Landing page: **[thewebisboring.design](https://thewebisboring.design)**
-- 🤖 Public agent on ASI:One / Agentverse: **[the extension orchestrator](https://agentverse.ai/agents/details/agent1q0a82jftlsmgjnuxw32mm2ewhtsyr4mnhke8tnmxv34nra5qjz8uzvmwgkw/profile)**
-- 🛠 Built at **[LA Hacks](https://lahacks.com)** for the Flicker to Flow track.
+- Landing page: **[thewebisboring.design](https://thewebisboring.design)**
+- Public agent on ASI:One / Agentverse: **[the extension orchestrator](https://agentverse.ai/agents/details/agent1q0a82jftlsmgjnuxw32mm2ewhtsyr4mnhke8tnmxv34nra5qjz8uzvmwgkw/profile)**
+- Built at **[LA Hacks](https://lahacks.com)** for the Flicker to Flow track.
 
 ## Repo layout
 
