@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -73,6 +74,11 @@ def _fresh_build(build: ExtensionBuildRequest) -> ExtensionBuildRequest:
         source=build.source,
         active_tabs=build.active_tabs,
     )
+
+
+async def _stage_pause(seconds: float = 0.55) -> None:
+    """Small UX delay so fast local steps still appear as a real pipeline."""
+    await asyncio.sleep(seconds)
 
 
 def _final_message(result: ExtensionBuildResult, spec: ExtensionSpec) -> str:
@@ -158,38 +164,53 @@ async def stream_orchestrator_events(
     await backend_client.ensure_project(build.project_id)
 
     yield {"type": "content", "content": "Agentverse Orchestrator: starting build.\n"}
+    await _stage_pause(0.45)
 
     yield {"type": "tool_start", "name": "Agentverse Architect", "args": {}}
+    await _stage_pause()
     architect = await run_architect(ArchitectRequest(build=build))
     yield {"type": "tool_end", "name": "Agentverse Architect"}
+    await _stage_pause(0.25)
     yield {"type": "content", "content": f"{architect.summary}\n"}
+    await _stage_pause(0.45)
 
     yield {"type": "tool_start", "name": "Agentverse RAG", "args": {}}
+    await _stage_pause()
     rag = await run_rag(
         RagRequest(job_id=build.job_id, spec=architect.spec, query=build.query)
     )
     yield {"type": "tool_end", "name": "Agentverse RAG"}
+    await _stage_pause(0.25)
     yield {"type": "content", "content": f"{rag.summary}\n"}
+    await _stage_pause(0.45)
 
     yield {"type": "tool_start", "name": "Agentverse Codegen", "args": {}}
+    await _stage_pause()
     codegen = await run_codegen(
         CodegenRequest(job_id=build.job_id, build=build, spec=architect.spec, rag=rag)
     )
     yield {"type": "tool_end", "name": "Agentverse Codegen"}
+    await _stage_pause(0.25)
     yield {"type": "content", "content": f"{codegen.summary}\n"}
+    await _stage_pause(0.45)
 
     yield {"type": "tool_start", "name": "Agentverse Validator", "args": {}}
+    await _stage_pause()
     validation = await run_validator(
         ValidationRequest(job_id=build.job_id, project_id=build.project_id)
     )
     yield {"type": "tool_end", "name": "Agentverse Validator"}
+    await _stage_pause(0.25)
     yield {"type": "content", "content": f"{validation.summary}\n"}
+    await _stage_pause(0.45)
 
     yield {"type": "tool_start", "name": "Agentverse Packager", "args": {}}
+    await _stage_pause()
     package = await run_packager(
         PackageRequest(job_id=build.job_id, project_id=build.project_id)
     )
     yield {"type": "tool_end", "name": "Agentverse Packager"}
+    await _stage_pause(0.25)
     yield {"type": "content", "content": f"{package.summary}\n"}
     yield {
         "type": "extension_ready",

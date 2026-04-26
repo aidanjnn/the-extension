@@ -42,15 +42,18 @@ const formatConsoleArgs = (args: unknown[]) =>
 
 const sendConsoleLog = (level: ConsoleLevel, args: unknown[]) => {
   const message = formatConsoleArgs(args)
-  void chrome.runtime.sendMessage({
-    type: MESSAGE_TYPES.storeConsoleLog,
-    payload: {
-      level,
-      timestamp: Date.now(),
-      message,
-      url: window.location.href,
-    },
-  })
+  if (!chrome?.runtime?.id) return
+  void chrome.runtime
+    .sendMessage({
+      type: MESSAGE_TYPES.storeConsoleLog,
+      payload: {
+        level,
+        timestamp: Date.now(),
+        message,
+        url: window.location.href,
+      },
+    })
+    .catch(() => {})
 }
 
 const hookConsole = () => {

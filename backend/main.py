@@ -35,6 +35,7 @@ from utils.agentverse_execution import (
     get_project_load_info,
     package_project_extension,
     read_project_files,
+    reset_project_workspace,
     validate_project_extension,
     write_project_files,
 )
@@ -357,6 +358,7 @@ async def agentverse_write_files(
     x_agentverse_token: str | None = Header(default=None),
 ):
     require_agentverse_token(x_agentverse_token)
+    reset_project_workspace(project_id)
     written = write_project_files(project_id, request.files)
     return AgentverseWriteFilesResponse(project_id=project_id, written_files=written)
 

@@ -20,9 +20,11 @@ DOM_IMPLEMENTATION_CORPUS: list[dict[str, Any]] = [
             "YouTube Shorts removal: target structural Shorts containers such as "
             "`ytd-reel-shelf-renderer`, `ytd-rich-section-renderer` with Shorts links, "
             "`ytd-guide-entry-renderer`/`ytd-mini-guide-entry-renderer` anchors whose "
-            "`href` starts with `/shorts`, and video/grid renderers containing "
-            "`a[href^='/shorts/']`. Do not hide all rich-grid rows. Use CSS plus a "
-            "MutationObserver that marks only the matched container."
+            "`href` starts with `/shorts` (handle both `/shorts` and `/shorts/`), and "
+            "video/grid renderers containing Shorts anchors. Use multiple selectors so "
+            "home feed, watch recommendations, and nav links are all covered. Do not "
+            "hide all rich-grid rows. Use CSS plus a MutationObserver that marks only "
+            "the matched container."
         ),
     },
     {
@@ -285,9 +287,16 @@ DOM_IMPLEMENTATION_CORPUS: list[dict[str, Any]] = [
         "sites": ["reddit"],
         "terms": ["sidebar", "recent posts", "recent"],
         "guidance": (
-            "Reddit sidebar/recent posts: target right sidebar/complementary panels and "
-            "recent-posts widgets by role, heading text, or `data-testid` where "
-            "available. Keep the main post list and comments visible."
+            "Reddit sidebar/recent posts: do not rely on only "
+            "`div[data-testid='sidebar-widget']`; modern Reddit often uses custom "
+            "elements and right-rail containers. Build a multi-signal detector that "
+            "checks `aside`, `[role='complementary']`, `shreddit-sidebar`, "
+            "`reddit-sidebar`, `[slot*='right']`, `[data-testid*='right']`, "
+            "`[data-testid*='sidebar']`, and custom elements/partials whose tag, "
+            "id, class, aria-label, heading, or nearby text includes Recent Posts. "
+            "Use `getBoundingClientRect()` as a fallback to require the candidate to "
+            "sit on the right side of the viewport before hiding it. Hide only the "
+            "smallest owning widget/panel, never `main`, the post list, or comments."
         ),
     },
     {
@@ -304,17 +313,26 @@ DOM_IMPLEMENTATION_CORPUS: list[dict[str, Any]] = [
 ]
 
 
-def retrieve_context(query: str, target_urls: list[str], limit: int = 5) -> list[str]:
-    """Return the most relevant implementation context for the request."""
+def _score_entries(query: str, target_urls: list[str]) -> list[dict[str, Any]]:
     haystack = f"{query} {' '.join(target_urls)}".lower()
     tokens = set(re.findall(r"[a-z0-9]+", haystack))
+    requested_sites = {
+        site
+        for entry in DOM_IMPLEMENTATION_CORPUS
+        for site in entry["sites"]
+        if _site_matches(site, haystack, tokens)
+    }
     scored: list[tuple[int, dict[str, Any]]] = []
 
     for entry in DOM_IMPLEMENTATION_CORPUS:
         score = 0
+        entry_site_match = False
         for site in entry["sites"]:
-            if site in haystack:
+            if _site_matches(site, haystack, tokens):
                 score += 4
+                entry_site_match = True
+        if requested_sites and not entry_site_match:
+            continue
         for term in entry["terms"]:
             term_lower = term.lower()
             if term_lower in haystack:
@@ -325,10 +343,30 @@ def retrieve_context(query: str, target_urls: list[str], limit: int = 5) -> list
             scored.append((score, entry))
 
     scored.sort(key=lambda item: item[0], reverse=True)
+    return [entry for _, entry in scored]
+
+
+def retrieve_context_entries(
+    query: str,
+    target_urls: list[str],
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Return the highest scoring corpus entries for this request."""
+    return _score_entries(query, target_urls)[:limit]
+
+
+def retrieve_context(query: str, target_urls: list[str], limit: int = 5) -> list[str]:
+    """Return the most relevant implementation context for the request."""
     return [
         f"{entry['title']}: {entry['guidance']}"
-        for _, entry in scored[:limit]
+        for entry in retrieve_context_entries(query, target_urls, limit=limit)
     ]
+
+
+def _site_matches(site: str, haystack: str, tokens: set[str]) -> bool:
+    if site == "x":
+        return "x.com" in haystack or "twitter.com" in haystack or "twitter" in tokens or "x" in tokens
+    return site in tokens or f"{site}.com" in haystack or f"www.{site}.com" in haystack
 
 
 def retrieve_nudges(query: str, target_urls: list[str], limit: int = 5) -> list[str]:

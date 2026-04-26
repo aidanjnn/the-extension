@@ -265,6 +265,10 @@ export default function App() {
 
   // WebSocket
   const wsRef = useRef<WebSocket | null>(null)
+  const wsIntentionalCloseRef = useRef(false)
+  const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wsReconnectForProjectRef = useRef<{ id: string; attempts: number } | null>(null)
+  const [wsConnectEpoch, setWsConnectEpoch] = useState(0)
   // Cache of tab info for resolving tab IDs to titles/favicons in tool labels
   const tabsMapRef = useRef<Map<number, TabInfo>>(new Map())
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -342,6 +346,24 @@ export default function App() {
   }
 
   const getFaviconUrl = (host: string) => `https://www.google.com/s2/favicons?domain=${host}&sz=16`
+
+  const waitForWebSocketRef = (timeoutMs = 2000) =>
+    new Promise<WebSocket | null>((resolve) => {
+      if (wsRef.current) {
+        resolve(wsRef.current)
+        return
+      }
+      const start = Date.now()
+      const t = setInterval(() => {
+        if (wsRef.current) {
+          clearInterval(t)
+          resolve(wsRef.current)
+        } else if (Date.now() - start > timeoutMs) {
+          clearInterval(t)
+          resolve(null)
+        }
+      }, 25)
+    })
 
   const waitForSocketOpen = (ws: WebSocket, timeoutMs = 5000) =>
     new Promise<boolean>((resolve) => {
@@ -1378,13 +1400,65 @@ export default function App() {
 
   // WebSocket connection management — one connection per active project
   useEffect(() => {
+    if (wsReconnectTimerRef.current) {
+      clearTimeout(wsReconnectTimerRef.current)
+      wsReconnectTimerRef.current = null
+    }
+
     if (!activeProject) {
       wsRef.current = null
+      wsReconnectForProjectRef.current = null
       return
     }
 
-    const ws = new WebSocket(`${WS_URL}/ws/${activeProject.id}`)
+    if (
+      !wsReconnectForProjectRef.current ||
+      wsReconnectForProjectRef.current.id !== activeProject.id
+    ) {
+      wsReconnectForProjectRef.current = { id: activeProject.id, attempts: 0 }
+    }
+
+    const projectId = activeProject.id
+    const maxReconnectAttempts = 20
+
+    const scheduleReconnect = () => {
+      const entry = wsReconnectForProjectRef.current
+      if (!entry || entry.id !== projectId) return
+      if (entry.attempts >= maxReconnectAttempts) {
+        setError(
+          'Chat server is unreachable. Start the dev backend (port 8000) or try again in a few seconds.',
+        )
+        return
+      }
+      entry.attempts += 1
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current)
+      }
+      wsReconnectTimerRef.current = setTimeout(() => {
+        wsReconnectTimerRef.current = null
+        setWsConnectEpoch((n) => n + 1)
+      }, 500)
+    }
+
+    const ws = new WebSocket(`${WS_URL}/ws/${projectId}`)
     wsRef.current = ws
+
+    ws.onopen = () => {
+      const entry = wsReconnectForProjectRef.current
+      if (entry && entry.id === projectId) {
+        entry.attempts = 0
+      }
+      setError((msg) => {
+        if (
+          msg === 'Connection lost' ||
+          msg === 'WebSocket connection error' ||
+          msg === 'Not connected to server yet'
+        ) {
+          return ''
+        }
+        return msg
+      })
+    }
 
     ws.onmessage = (event) => {
       try {
@@ -1513,6 +1587,11 @@ export default function App() {
     }
 
     ws.onclose = () => {
+      if (wsIntentionalCloseRef.current) {
+        wsIntentionalCloseRef.current = false
+        wsRef.current = null
+        return
+      }
       // If we were mid-stream, treat as error
       if (messageHandlerRef.current) {
         setError('Connection lost')
@@ -1521,14 +1600,20 @@ export default function App() {
         messageHandlerRef.current = null
       }
       wsRef.current = null
+      scheduleReconnect()
     }
 
     return () => {
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current)
+        wsReconnectTimerRef.current = null
+      }
       messageHandlerRef.current = null
+      wsIntentionalCloseRef.current = true
       ws.close()
       wsRef.current = null
     }
-  }, [activeProject?.id])
+  }, [activeProject?.id, wsConnectEpoch])
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -1595,6 +1680,8 @@ export default function App() {
   }
 
   const selectProject = (project: Project) => {
+    wsReconnectForProjectRef.current = { id: project.id, attempts: 0 }
+    setWsConnectEpoch((n) => n + 1)
     setActiveProject(project)
     setActiveConversationId(null)
     setMessages([])
@@ -1669,11 +1756,14 @@ export default function App() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const ws = wsRef.current
     const displayParts = serializeEditorForDisplayParts()
     const displayText = displayPartsToText(displayParts).trim()
     const rawMessage = (await serializeEditorWithHtml()).trim()
     if (!rawMessage || loading || !activeProject) return
+    let ws: WebSocket | null = wsRef.current
+    if (!ws) {
+      ws = await waitForWebSocketRef()
+    }
     if (!ws) {
       setError('Not connected to server yet')
       return

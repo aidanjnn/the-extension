@@ -48,7 +48,11 @@ def _infer_target_urls(query: str, active_tabs: list[dict]) -> list[str]:
     if "reddit" in lowered:
         return ["https://www.reddit.com/*", "https://reddit.com/*"]
 
-    for tab in active_tabs:
+    # If the query does not name a site, prefer the user's currently active tab.
+    active_first = [tab for tab in active_tabs if tab.get("active")]
+    fallback_tabs = active_first + [tab for tab in active_tabs if tab not in active_first]
+
+    for tab in fallback_tabs:
         url = tab.get("url", "")
         match = re.match(r"https?://([^/]+)/?", url)
         if match:
