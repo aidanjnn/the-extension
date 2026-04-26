@@ -118,7 +118,8 @@ function ensureStyle() {
       z-index: 2147483646 !important;
     }
   `
-  document.head?.appendChild(style)
+  const mountTarget = document.head || document.documentElement
+  mountTarget?.appendChild(style)
 }
 
 /**
@@ -430,6 +431,18 @@ function setSidepanelState(open: boolean) {
 export async function startHoverHighlighter() {
   ensureStyle()
   ensureOverlay()
+
+  // The content script runs at document_start, so <head> may not exist yet.
+  // Re-run style injection once parsing advances to guarantee the overlays are styled.
+  if (!document.head) {
+    document.addEventListener(
+      'readystatechange',
+      () => {
+        ensureStyle()
+      },
+      { once: true },
+    )
+  }
 
   await syncSidepanelState()
 
