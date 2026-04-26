@@ -127,7 +127,7 @@ Output ONLY the JSON object, no prose, no markdown fences.
 
 
 def _strip_chip_html(text: str) -> str:
-    """Strip Browser Forge chip HTML markers from a query."""
+    """Strip element-chip HTML markers from a query."""
     cleaned = re.sub(
         r"<!--EVOLVE_CHIP_START:[^>]*-->.*?<!--EVOLVE_CHIP_END-->",
         "",

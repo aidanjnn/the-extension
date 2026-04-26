@@ -1,6 +1,6 @@
-# Browser Forge architecture
+# the extension — architecture
 
-Browser Forge has three moving parts:
+the extension has three moving parts:
 
 - ASI:One and Agentverse for discovery and public chat.
 - A FastAPI backend for execution work that needs local filesystem and browser access.

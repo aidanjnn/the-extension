@@ -1,6 +1,6 @@
-# Browser Forge Chat Context
+# the extension — Chat Context
 
-Browser Forge turns browser customization requests into Chrome extension artifacts.
+the extension turns browser customization requests into Chrome extension artifacts.
 
 Current workspace:
 

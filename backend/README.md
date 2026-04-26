@@ -1,6 +1,6 @@
 # Backend
 
-This backend is the execution layer for Browser Forge. Agentverse handles discovery and chat. FastAPI handles local work: project storage, generated extension files, Manifest V3 validation, ZIP packaging, and load instructions for Chrome.
+This backend is the execution layer for the extension. Agentverse handles discovery and chat. FastAPI handles local work: project storage, generated extension files, Manifest V3 validation, ZIP packaging, and load instructions for Chrome.
 
 ## Setup
 

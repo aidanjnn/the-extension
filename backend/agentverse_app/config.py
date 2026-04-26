@@ -29,13 +29,13 @@ class AgentverseSettings:
     execution_api_token: str = _env("AGENTVERSE_EXECUTION_TOKEN", "dev-agentverse-token")
     orchestrator_seed: str = _env(
         "ORCHESTRATOR_SEED",
-        "browser-forge-orchestrator-demo-seed",
+        "the-extension-orchestrator-demo-seed",
     )
-    architect_seed: str = _env("ARCHITECT_SEED", "browser-forge-architect-demo-seed")
-    rag_seed: str = _env("RAG_SEED", "browser-forge-rag-demo-seed")
-    codegen_seed: str = _env("CODEGEN_SEED", "browser-forge-codegen-demo-seed")
-    validator_seed: str = _env("VALIDATOR_SEED", "browser-forge-validator-demo-seed")
-    packager_seed: str = _env("PACKAGER_SEED", "browser-forge-packager-demo-seed")
+    architect_seed: str = _env("ARCHITECT_SEED", "the-extension-architect-demo-seed")
+    rag_seed: str = _env("RAG_SEED", "the-extension-rag-demo-seed")
+    codegen_seed: str = _env("CODEGEN_SEED", "the-extension-codegen-demo-seed")
+    validator_seed: str = _env("VALIDATOR_SEED", "the-extension-validator-demo-seed")
+    packager_seed: str = _env("PACKAGER_SEED", "the-extension-packager-demo-seed")
     architect_address: str = _env("ARCHITECT_AGENT_ADDRESS")
     rag_address: str = _env("RAG_AGENT_ADDRESS")
     codegen_address: str = _env("CODEGEN_AGENT_ADDRESS")

@@ -379,11 +379,11 @@ function ThinkingBlock({
   )
 }
 
-// Function injected into the active web page to render Browser Forge as a
+// Function injected into the active web page to render the extension as a
 // draggable floating overlay (Dia-style: no browser chrome, sits above page).
 // Must be self-contained — runs in page context via chrome.scripting.executeScript.
 function injectFloatingOverlay(iframeUrl: string) {
-  const HOST_ID = 'browser-forge-floating-host'
+  const HOST_ID = 'the-extension-floating-host'
   const existing = document.getElementById(HOST_ID)
   if (existing) {
     existing.remove()
@@ -1281,7 +1281,7 @@ export default function App() {
               if (rule.type !== CSSRule.STYLE_RULE) continue
               const styleRule = rule as CSSStyleRule
               try {
-                if (styleRule.selectorText.includes('browser-forge-clicked-highlight')) {
+                if (styleRule.selectorText.includes('the-extension-clicked-highlight')) {
                   continue
                 }
                 if (el.matches(styleRule.selectorText)) {
@@ -2207,7 +2207,7 @@ export default function App() {
       const res = await fetch(`${API_URL}/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Browser Forge' }),
+        body: JSON.stringify({ name: 'the extension' }),
       })
       if (res.ok) {
         const project: Project = await res.json()
@@ -2947,7 +2947,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: activeProject?.name ? `${activeProject.name} DOM edits` : 'Browser Forge DOM edits',
+          name: activeProject?.name ? `${activeProject.name} DOM edits` : 'the extension DOM edits',
           target_urls: targetUrlPatternsForDomEdits(),
           operations: domEdits,
         }),
@@ -3036,9 +3036,9 @@ export default function App() {
               <path d="m17 3 4 4-9.5 9.5L7 17l.5-4.5L17 3z" />
             </svg>
           </button>
-          <h1>Browser Forge</h1>
+          <h1>the extension</h1>
           <div className="header-actions">
-            <div className="app-mode-toggle" role="tablist" aria-label="Browser Forge mode">
+            <div className="app-mode-toggle" role="tablist" aria-label="the extension mode">
               <button
                 type="button"
                 role="tab"
@@ -3250,13 +3250,13 @@ export default function App() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                   </svg>
-                  <span>Browser Forge</span>
+                  <span>the extension</span>
                 </div>
                 <div className="preview-card-quote">
                   "Hide YouTube Shorts so I can focus."
                 </div>
               </div>
-              <div className="empty-canvas-title">Starting Browser Forge</div>
+              <div className="empty-canvas-title">Starting the extension</div>
               <div className="empty-canvas-hint">Preparing your chat workspace…</div>
             </div>
           )}
@@ -3267,7 +3267,7 @@ export default function App() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                   </svg>
-                  <span>Browser Forge</span>
+                  <span>the extension</span>
                 </div>
                 <div className="preview-card-quote">
                   "Hide YouTube Shorts so I can focus."

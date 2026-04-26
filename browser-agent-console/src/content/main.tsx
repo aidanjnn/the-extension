@@ -4,7 +4,7 @@ import { setHoverHighlighterEnabled, startHoverHighlighter } from './highlighter
 import { MESSAGE_TYPES } from '../shared/messages'
 import App from './views/App.tsx'
 
-console.log('[Browser Forge] content script loaded')
+console.log('[the extension] content script loaded')
 
 const CONSOLE_LEVELS = ['log', 'info', 'warn', 'error', 'debug'] as const
 type ConsoleLevel = (typeof CONSOLE_LEVELS)[number]
@@ -57,9 +57,9 @@ const sendConsoleLog = (level: ConsoleLevel, args: unknown[]) => {
 }
 
 const hookConsole = () => {
-  const win = window as unknown as { __browserForgeConsoleHooked?: boolean }
-  if (win.__browserForgeConsoleHooked) return
-  win.__browserForgeConsoleHooked = true
+  const win = window as unknown as { __theExtensionConsoleHooked?: boolean }
+  if (win.__theExtensionConsoleHooked) return
+  win.__theExtensionConsoleHooked = true
 
   CONSOLE_LEVELS.forEach((level) => {
     const consoleRef = console as unknown as Record<string, (...args: unknown[]) => void>
@@ -194,19 +194,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const selector = message?.selector
     const stripHighlighting = (root: Element) => {
       const idsToRemove = [
-        'browser-forge-hover-highlight-style',
-        'browser-forge-hover-highlight-overlay',
-        'browser-forge-hover-highlight-label',
-        'browser-forge-click-highlight-overlay',
-        'browser-forge-click-highlight-label',
+        'the-extension-hover-highlight-style',
+        'the-extension-hover-highlight-overlay',
+        'the-extension-hover-highlight-label',
+        'the-extension-click-highlight-overlay',
+        'the-extension-click-highlight-label',
       ]
 
-      if (root.classList.contains('browser-forge-clicked-highlight')) {
-        root.classList.remove('browser-forge-clicked-highlight')
+      if (root.classList.contains('the-extension-clicked-highlight')) {
+        root.classList.remove('the-extension-clicked-highlight')
       }
 
-      root.querySelectorAll('.browser-forge-clicked-highlight').forEach((el) => {
-        el.classList.remove('browser-forge-clicked-highlight')
+      root.querySelectorAll('.the-extension-clicked-highlight').forEach((el) => {
+        el.classList.remove('the-extension-clicked-highlight')
       })
 
       idsToRemove.forEach((id) => {
@@ -246,7 +246,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 })
 
 const container = document.createElement('div')
-container.id = 'browser-forge-app'
+container.id = 'the-extension-app'
 document.body.appendChild(container)
 createRoot(container).render(
   <StrictMode>

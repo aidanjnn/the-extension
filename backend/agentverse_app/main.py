@@ -1,4 +1,4 @@
-"""Runnable Agentverse/uAgents app for Browser Forge.
+"""Runnable Agentverse/uAgents app for the extension.
 
 Run locally with:
     uv run python -m agentverse_app.main
@@ -39,37 +39,37 @@ from agentverse_app.validator import run_validator
 
 
 orchestrator = Agent(
-    name="browser_forge_orchestrator",
+    name="the_extension_orchestrator",
     seed=settings.orchestrator_seed,
     mailbox=False,
     publish_agent_details=True,
 )
 architect = Agent(
-    name="browser_forge_architect",
+    name="the_extension_architect",
     seed=settings.architect_seed,
     mailbox=False,
     publish_agent_details=True,
 )
 rag = Agent(
-    name="browser_forge_rag",
+    name="the_extension_rag",
     seed=settings.rag_seed,
     mailbox=False,
     publish_agent_details=True,
 )
 codegen = Agent(
-    name="browser_forge_codegen",
+    name="the_extension_codegen",
     seed=settings.codegen_seed,
     mailbox=False,
     publish_agent_details=True,
 )
 validator = Agent(
-    name="browser_forge_validator",
+    name="the_extension_validator",
     seed=settings.validator_seed,
     mailbox=False,
     publish_agent_details=True,
 )
 packager = Agent(
-    name="browser_forge_packager",
+    name="the_extension_packager",
     seed=settings.packager_seed,
     mailbox=False,
     publish_agent_details=True,

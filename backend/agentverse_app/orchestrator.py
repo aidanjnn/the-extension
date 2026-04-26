@@ -82,7 +82,7 @@ async def _stage_pause(seconds: float = 0.55) -> None:
 
 
 def _final_message(result: ExtensionBuildResult, spec: ExtensionSpec) -> str:
-    name = spec.name or "Browser Forge Extension"
+    name = spec.name or "the extension"
     targets = ", ".join(spec.target_urls) or "the active tab"
     download = _download_url(result.project_id)
 

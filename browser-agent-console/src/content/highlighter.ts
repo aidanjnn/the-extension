@@ -19,12 +19,12 @@ type HighlighterState = {
 }
 
 const STORAGE_KEY = 'hoverHighlighter'
-const STYLE_ID = 'browser-forge-hover-highlight-style'
-const OVERLAY_ID = 'browser-forge-hover-highlight-overlay'
-const LABEL_ID = 'browser-forge-hover-highlight-label'
-const CLICK_OVERLAY_ID = 'browser-forge-click-highlight-overlay'
-const CLICK_LABEL_ID = 'browser-forge-click-highlight-label'
-const CLICKED_CLASS = 'browser-forge-clicked-highlight'
+const STYLE_ID = 'the-extension-hover-highlight-style'
+const OVERLAY_ID = 'the-extension-hover-highlight-overlay'
+const LABEL_ID = 'the-extension-hover-highlight-label'
+const CLICK_OVERLAY_ID = 'the-extension-click-highlight-overlay'
+const CLICK_LABEL_ID = 'the-extension-click-highlight-label'
+const CLICKED_CLASS = 'the-extension-clicked-highlight'
 const SAVE_DEBOUNCE_MS = 250
 
 import {
@@ -181,7 +181,7 @@ function getElementInfo(el: Element): ElementInfo {
  * Returns true if the element belongs to the extension UI container.
  */
 function isExtensionUi(el: Element): boolean {
-  return Boolean(el.closest('#browser-forge-app'))
+  return Boolean(el.closest('#the-extension-app'))
 }
 
 /**

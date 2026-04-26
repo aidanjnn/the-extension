@@ -1,4 +1,4 @@
-"""Register Browser Forge agents on Agentverse.
+"""Register the extension's agents on Agentverse.
 
 Run after the agents are reachable from the public endpoint configured in
 PUBLIC_AGENT_BASE_URL:

@@ -20,7 +20,7 @@ from utils.tools import (
 )
 
 
-class BrowserForgeAgent:
+class TheExtensionAgent:
     def __init__(self):
         # Lazily create LLMs so missing keys for unused providers do not break startup.
         self._llms = {}

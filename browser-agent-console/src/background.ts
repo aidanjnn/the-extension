@@ -188,7 +188,7 @@ async function broadcastClickedElementsUpdated(elements: ClickedElementStored[])
 const sidepanelStateByTab = new Map<number, boolean>()
 let isSidepanelOpen = false
 let isDomEditMode = false
-const INITIAL_RELOAD_KEY = 'browserForgeSidepanelInitialReloadDone'
+const INITIAL_RELOAD_KEY = 'theExtensionSidepanelInitialReloadDone'
 
 const consoleLogsByTab = new Map<number, ConsoleLogEntry[]>()
 const MAX_CONSOLE_LOGS_PER_TAB = 500
@@ -321,7 +321,7 @@ sidePanelApi.onStateChanged?.addListener((state: SidePanelState) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id ?? message?.tabId
 
-  // Re-pin Browser Forge as a side panel from the floating overlay.
+  // Re-pin the extension as a side panel from the floating overlay.
   if (message?.type === 'bf:open-sidepanel') {
     chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
       if (tab?.windowId !== undefined) {

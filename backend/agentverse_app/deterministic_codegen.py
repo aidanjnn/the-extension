@@ -109,7 +109,7 @@ function scheduleApply() {{
     try {{
       applyRules();
     }} catch (err) {{
-      console.debug('Browser Forge applyRules failed', err);
+      console.debug('applyRules failed', err);
     }}
   }});
 }}

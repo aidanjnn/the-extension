@@ -1,136 +1,135 @@
-# Browser Forge
+# the extension
 
-Browser Forge turns a plain-language browser customization request into a Chrome extension. The public entry point is an Agentverse agent that can be discovered and chatted with from ASI:One. The local backend does the work that a hosted chat agent should not do: write files, validate Manifest V3 projects, package artifacts, and hand the browser UI an install path.
+> personalize your browsing experience in seconds
 
-The current demo flow is simple:
+**the extension** is an AI-agent powered Chrome side panel that turns one sentence into a real, installable Chrome extension. Type what you want, and an Agentverse-registered agent plans it, writes it, validates the Manifest V3 manifest, packages a ZIP, and hands you a Load Unpacked card. End to end, prompt to installed extension, takes under a minute.
 
-```text
-ASI:One or the Chrome side panel
--> Agentverse Orchestrator
--> specialist build steps
--> FastAPI execution API
--> generated Chrome extension
-```
+It also has an **Edit DOM mode**: hold ⌘, hover any element on a webpage, click to select it, and tell the agent things like "make this 30% wider," "hide it," "move it to the top," or "change the text to 'inbox zero'." Watch the page change live. When you're happy with the edits, one button exports them as a permanent Chrome extension that re-applies your changes every time you visit that site.
 
-## What is in this repo
+- 🌐 Landing page: **[thewebisboring.design](https://thewebisboring.design)**
+- 🤖 Public agent on ASI:One / Agentverse: **[the extension orchestrator](https://agentverse.ai/agents/details/agent1q0a82jftlsmgjnuxw32mm2ewhtsyr4mnhke8tnmxv34nra5qjz8uzvmwgkw/profile)**
+- 🛠 Built at **[LA Hacks](https://lahacks.com)** for the Flicker to Flow track.
 
-- `backend/`: FastAPI app, Agentverse/uAgents integration, extension generation helpers, validation, packaging, SQLite project storage.
-- `browser-agent-console/`: Chrome side panel extension built with React, TypeScript, Vite, and CRXJS.
-- `backend/generated_extensions/`: local generated extension workspaces and ZIP artifacts. This directory is ignored by git.
-
-## Agentverse and ASI:One
-
-The Orchestrator agent is the public Agent Chat Protocol agent. It is registered on Agentverse and can be discovered from ASI:One. When a user asks for a browser change, the Orchestrator runs the build pipeline:
+## Repo layout
 
 ```text
-Orchestrator
--> Architect
--> RAG/context
--> Codegen
--> Validator
--> Packager
+backend/                FastAPI execution layer + uAgents (Agentverse) app
+browser-agent-console/  Chrome side panel (React + TypeScript + Vite)
+ARCHITECTURE.md         deeper architecture reference
+DEVPOST.md              Devpost submission writeup
 ```
-
-The specialist roles are implemented in `backend/agentverse_app/`. They currently run in one local uAgents Bureau for reliability during demos. The registered Orchestrator is enough for the end-to-end flow; registering the specialist roles separately gives you extra Agentverse profile pages for the track.
 
 ## Requirements
 
 - Python 3.12+
-- `uv`
-- Node.js and npm
+- [`uv`](https://github.com/astral-sh/uv)
+- Node.js 18+ and npm
 - Chrome or Chromium
-- `ngrok` if you want Agentverse/ASI:One to reach your local agent
+- [`ngrok`](https://ngrok.com) (free tier is fine)
 
-## Backend
+## Clone and install
+
+```bash
+git clone https://github.com/aidanjnn/the-extension.git
+cd the-extension
+
+# backend deps
+cd backend && uv sync && cd ..
+
+# extension deps
+cd browser-agent-console && npm install && cd ..
+```
+
+## Environment
+
+Create `backend/.env` (this file is gitignored). The seeds determine the agent's on-Agentverse identity, so leave them alone unless you want to register a fresh agent.
+
+```env
+GEMINI_API_KEY=your_gemini_key
+AGENTVERSE_API_KEY=your_agentverse_key
+
+PUBLIC_AGENT_BASE_URL=https://your-static-ngrok-uagents-url
+PUBLIC_BACKEND_BASE_URL=https://your-public-backend-url
+BACKEND_EXECUTION_API_URL=http://localhost:8000
+UAGENTS_PORT=8001
+AGENTVERSE_EXECUTION_TOKEN=dev-agentverse-token
+
+ORCHESTRATOR_SEED=the-extension-orchestrator-demo-seed
+ARCHITECT_SEED=the-extension-architect-demo-seed
+RAG_SEED=the-extension-rag-demo-seed
+CODEGEN_SEED=the-extension-codegen-demo-seed
+VALIDATOR_SEED=the-extension-validator-demo-seed
+PACKAGER_SEED=the-extension-packager-demo-seed
+```
+
+Set up an ngrok config at `~/Library/Application Support/ngrok/ngrok.yml` so a single command starts both tunnels:
+
+```yaml
+version: "3"
+agent:
+  authtoken: <your-ngrok-authtoken>
+tunnels:
+  uagents:
+    proto: http
+    addr: 8001
+    domain: <your-static-ngrok-domain>.ngrok-free.dev
+  backend:
+    proto: http
+    addr: 8000
+```
+
+The `uagents` tunnel needs a static domain so Agentverse can keep reaching your registered agent. The `backend` tunnel can be ephemeral.
+
+## Run the four dev servers
+
+You'll want four terminals running at once.
+
+**1. FastAPI backend** — port 8000
 
 ```bash
 cd backend
-uv sync
 uv run main.py
 ```
 
-The backend listens on `http://localhost:8000`.
-
-Useful checks:
-
-```bash
-curl http://localhost:8000/projects
-```
-
-## Agentverse agent server
-
-Run the uAgents process in a second terminal:
+**2. uAgents Chat Protocol server** — port 8001
 
 ```bash
 cd backend
 uv run python -m agentverse_app.main
 ```
 
-It listens on `http://localhost:8001` and exposes the Chat Protocol endpoint at:
-
-```text
-http://localhost:8001/submit
-```
-
-Expose it to Agentverse with ngrok:
+**3. ngrok tunnels** — exposes 8000 and 8001 publicly
 
 ```bash
-ngrok http 8001
+ngrok start uagents backend
 ```
 
-Use the HTTPS ngrok URL plus `/submit` as the Agentverse endpoint, for example:
+After ngrok prints the backend URL, copy it into `PUBLIC_BACKEND_BASE_URL` in `backend/.env` and restart the FastAPI server.
 
-```text
-https://example.ngrok-free.dev/submit
-```
-
-## Chrome side panel
+**4. Chrome side panel dev build**
 
 ```bash
 cd browser-agent-console
-npm install
 npm run dev
 ```
 
-Then open `chrome://extensions`, enable Developer mode, choose Load unpacked, and select `browser-agent-console/dist`.
+Then open `chrome://extensions`, enable Developer mode, click **Load unpacked**, and select `browser-agent-console/dist`. Pin the side panel and you're good.
 
-## Generated extensions
+## Try it
 
-Agentverse builds are written to:
-
-```text
-backend/generated_extensions/{project_id}
-```
-
-Packaged ZIPs are written to:
+In the side panel (or via ASI:One on the agent's [public page](https://agentverse.ai/agents/details/agent1q0a82jftlsmgjnuxw32mm2ewhtsyr4mnhke8tnmxv34nra5qjz8uzvmwgkw/profile)):
 
 ```text
-backend/generated_extensions/_artifacts/{project_id}.zip
+Hide YouTube comments and Shorts on the homepage.
 ```
 
-For local testing, load the generated folder with Chrome's Load unpacked button. Use the folder that contains `manifest.json`, not the `_artifacts` directory.
+You should see progress events, an `extension_ready` install card, and a folder + ZIP under `backend/generated_extensions/`. Load the unpacked folder, refresh YouTube, comments are gone.
 
-## Environment
+## Where things live
 
-Create `backend/.env` with the keys you need:
+- `backend/main.py` — FastAPI routes, WebSocket chat, DOM-edits export endpoint
+- `backend/agentverse_app/` — uAgents Bureau, Orchestrator, and specialist roles (Architect / RAG / Codegen / Validator / Packager)
+- `browser-agent-console/src/sidepanel/` — Create / Edit DOM UI
+- `browser-agent-console/src/content/` — Cmd-hover purple overlay and live DOM ops
 
-```env
-GEMINI_API_KEY=...
-AGENTVERSE_API_KEY=...
-PUBLIC_AGENT_BASE_URL=https://your-ngrok-url
-BACKEND_EXECUTION_API_URL=http://localhost:8000
-UAGENTS_PORT=8001
-AGENTVERSE_EXECUTION_TOKEN=dev-agentverse-token
-```
-
-Keep `.env` out of git.
-
-## Demo prompt
-
-In ASI:One or the side panel, try:
-
-```text
-Build a Chrome extension that hides Instagram Reels links.
-```
-
-The expected response includes a validation summary, an extension path, and load instructions.
+For the deeper architecture see [`ARCHITECTURE.md`](./ARCHITECTURE.md). For the Devpost writeup see [`DEVPOST.md`](./DEVPOST.md).
