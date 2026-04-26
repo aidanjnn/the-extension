@@ -31,7 +31,9 @@ Critical rules:
 2. NEVER use overly broad selectors like `[class*="shorts" i]` or matching on \
    `textContent` of any element — they will hide entire page sections.
 3. NEVER walk up to ancestor containers using generic tags like \
-   `closest('section, article, nav, aside')` — you will hide the whole page.
+   `closest('section, article, nav, aside')` — you will hide the whole page. \
+   Also never set `document.body.style.display` or `document.body.style.visibility` \
+   to hide the entire page; direct style changes like `backgroundColor` are fine.
 4. Use a MutationObserver for dynamic single-page apps; debounce with \
    requestAnimationFrame if needed.
 5. Use CSS `:has()` selectors where supported for clean hide rules, but pair CSS \
@@ -273,8 +275,9 @@ def _quality_issues(files: dict[str, str], target_urls: list[str]) -> list[str]:
     combined = f"{content_js}\n{content_css}".lower()
     if re.search(r"\[class\*=['\"][^'\"]+['\"]\s+i?\]", combined):
         issues.append("Do not use broad class substring selectors like [class*=...].")
-    if "document.body.style" in combined or "document.documentelement.style" in combined:
-        issues.append("Do not style or hide document.body/documentElement.")
+    # Only block destructive body/html hiding, not legitimate style changes (e.g. background color).
+    if re.search(r"document\.(body|documentelement)\.style\.(display|visibility)\s*=", combined):
+        issues.append("Do not set display or visibility on document.body/documentElement.")
     if "display', 'none" in combined and "document.queryselectorall('*')" in combined:
         issues.append("Do not iterate over every DOM node and hide matches.")
     if "textcontent" in combined and "closest('section, article, nav, aside" in combined:

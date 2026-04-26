@@ -238,11 +238,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 })
 
-const container = document.createElement('div')
-container.id = 'browser-forge-app'
-document.body.appendChild(container)
-createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+function initApp() {
+  if (document.getElementById('browser-forge-app')) return
+  const container = document.createElement('div')
+  container.id = 'browser-forge-app'
+  document.body.appendChild(container)
+  createRoot(container).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+}
+
+if (document.body) {
+  initApp()
+} else {
+  document.addEventListener('DOMContentLoaded', initApp)
+}

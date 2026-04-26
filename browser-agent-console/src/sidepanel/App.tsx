@@ -276,12 +276,36 @@ export default function App() {
   const [mentionPosition, setMentionPosition] = useState<{ top: number; left: number } | null>(null)
   const [tabMatches, setTabMatches] = useState<TabMatch[]>([])
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
+  const [currentActiveTab, setCurrentActiveTab] = useState<chrome.tabs.Tab | null>(null)
 
   // Sidepanel open/close state is derived from chrome.sidePanel.onStateChanged in the background.
 
   // Load projects on mount
   useEffect(() => {
     fetchProjects()
+  }, [])
+
+  // Sync the active browser tab for the context indicator
+  useEffect(() => {
+    const updateActiveTab = async () => {
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+        setCurrentActiveTab(tabs[0] || null)
+      } catch {
+        // ignore
+      }
+    }
+
+    updateActiveTab()
+    chrome.tabs.onActivated.addListener(updateActiveTab)
+    const onUpdated = (_tabId: number, _changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
+      if (tab.active) updateActiveTab()
+    }
+    chrome.tabs.onUpdated.addListener(onUpdated)
+    return () => {
+      chrome.tabs.onActivated.removeListener(updateActiveTab)
+      chrome.tabs.onUpdated.removeListener(onUpdated)
+    }
   }, [])
 
   // Close chip tooltips when clicking outside.
@@ -1739,7 +1763,12 @@ export default function App() {
           id: t.id as number,
           url: t.url ?? '',
           title: t.title ?? '',
-          active: t.active ?? false,
+          // Only mark the tab that matches currentActiveTab as active — prevents
+          // tabs from other windows (e.g. Google Docs in a second window) from
+          // being mistakenly treated as the active context.
+          active: currentActiveTab != null
+            ? t.id === currentActiveTab.id
+            : (t.active ?? false),
         }))
       // Cache tab info for resolving tool labels later
       const map = new Map<number, TabInfo>()
@@ -2344,6 +2373,14 @@ export default function App() {
         {htmlSummaryCount > 0 && (
           <div className="html-summarizing">Summarizing context…</div>
         )}
+
+        {/* Active tab context indicator */}
+        <div className="active-tab-context">
+          {currentActiveTab?.favIconUrl && (
+            <img src={currentActiveTab.favIconUrl} alt="favicon" />
+          )}
+          <span>{currentActiveTab?.url || 'No active tab'}</span>
+        </div>
 
         {/* Input */}
         <form onSubmit={handleSubmit} className="chat-input">

@@ -48,9 +48,8 @@ let overlayEl: HTMLDivElement | null = null
 let labelEl: HTMLDivElement | null = null
 let clickOverlayEl: HTMLDivElement | null = null
 let clickLabelEl: HTMLDivElement | null = null
-let isMetaKeyDown = false
+let isAltKeyDown = false
 let isSidepanelOpen = false
-let sidepanelStateKnown = false
 
 /**
  * Injects the overlay/label and clicked-highlight styles once per page.
@@ -298,10 +297,8 @@ async function syncSidepanelState() {
     })
     if (response?.known === true) {
       setSidepanelState(Boolean(response?.isOpen))
-      sidepanelStateKnown = true
       return
     }
-    sidepanelStateKnown = false
   } catch {
     // Ignore errors to keep highlighter functional
   }
@@ -390,10 +387,10 @@ function applyClickedOverlay(el: Element | null) {
  */
 function handleMouseMove(event: MouseEvent) {
   if (!state.enabled) return
-  if (!isSidepanelOpen && sidepanelStateKnown) return
-  if (!event.metaKey && !isMetaKeyDown) return
-  if (event.metaKey && !isMetaKeyDown) {
-    isMetaKeyDown = true
+  if (!isSidepanelOpen) return
+  if (!event.altKey && !isAltKeyDown) return
+  if (event.altKey && !isAltKeyDown) {
+    isAltKeyDown = true
   }
   const el = document.elementFromPoint(event.clientX, event.clientY)
   if (!el || isExtensionUi(el)) return
@@ -412,7 +409,6 @@ function handleMouseMove(event: MouseEvent) {
 function setSidepanelState(open: boolean) {
   if (isSidepanelOpen === open) return
   isSidepanelOpen = open
-  sidepanelStateKnown = true
 
   if (isSidepanelOpen) {
     void restoreClickedHighlights()
@@ -468,28 +464,28 @@ export async function startHoverHighlighter() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       applyHighlight(null)
-      isMetaKeyDown = false
+      isAltKeyDown = false
       void clearAllClickedHighlights()
       return
     }
 
-    if (event.metaKey) {
-      isMetaKeyDown = true
+    if (event.altKey) {
+      isAltKeyDown = true
     }
   }, true)
 
   document.addEventListener('keyup', (event) => {
-    if (event.key === 'Meta' || !event.metaKey) {
-      if (isMetaKeyDown) {
-        isMetaKeyDown = false
+    if (event.key === 'Alt' || !event.altKey) {
+      if (isAltKeyDown) {
+        isAltKeyDown = false
         applyHighlight(null)
       }
     }
   }, true)
 
   window.addEventListener('blur', () => {
-    if (isMetaKeyDown) {
-      isMetaKeyDown = false
+    if (isAltKeyDown) {
+      isAltKeyDown = false
       applyHighlight(null)
     }
   })
@@ -517,10 +513,10 @@ export async function startHoverHighlighter() {
   })
 
   document.addEventListener('click', (event) => {
-    if (!isSidepanelOpen && sidepanelStateKnown) return
-    if (!event.metaKey && !isMetaKeyDown) return
-    if (event.metaKey && !isMetaKeyDown) {
-      isMetaKeyDown = true
+    if (!isSidepanelOpen) return
+    if (!event.altKey && !isAltKeyDown) return
+    if (event.altKey && !isAltKeyDown) {
+      isAltKeyDown = true
     }
     event.preventDefault()
     event.stopImmediatePropagation()

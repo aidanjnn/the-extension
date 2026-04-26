@@ -1460,3 +1460,31 @@
     background: rgba(0, 0, 0, 0.03);
   }
 }
+
+/* Active tab context indicator */
+.active-tab-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 16px 8px 16px;
+  padding: 3px 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  font-size: 11px;
+  color: #888;
+  max-width: calc(100% - 32px);
+  cursor: default;
+}
+
+.active-tab-context span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.active-tab-context img {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}

@@ -31,6 +31,14 @@ def _infer_target_urls(query: str, active_tabs: list[dict]) -> list[str]:
         return ["https://mail.google.com/*"]
 
     for tab in active_tabs:
+        if tab.get("active"):
+            url = tab.get("url", "")
+            match = re.match(r"https?://([^/]+)/?", url)
+            if match:
+                host = match.group(1)
+                return [f"https://{host}/*"]
+
+    for tab in active_tabs:
         url = tab.get("url", "")
         match = re.match(r"https?://([^/]+)/?", url)
         if match:
