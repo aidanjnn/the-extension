@@ -56,6 +56,34 @@ def _step(agent_name: str, summary: str, payload: dict | None = None) -> AgentSt
     )
 
 
+def _short(value: str, limit: int = 72) -> str:
+    value = " ".join(str(value).split())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def _artifact_event(
+    stage: str,
+    agent: str,
+    title: str,
+    summary: str,
+    meta: list[dict[str, str]] | None = None,
+    chips: list[str] | None = None,
+) -> dict:
+    return {
+        "type": "agent_artifact",
+        "artifact": {
+            "stage": stage,
+            "agent": agent,
+            "title": title,
+            "summary": _short(summary, 160),
+            "meta": meta or [],
+            "chips": [_short(chip, 40) for chip in (chips or []) if chip],
+        },
+    }
+
+
 def _download_url(project_id: str) -> str | None:
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
     base = os.getenv("PUBLIC_BACKEND_BASE_URL", settings.public_backend_base_url).rstrip("/")
@@ -82,7 +110,7 @@ async def _stage_pause(seconds: float = 0.55) -> None:
 
 
 def _final_message(result: ExtensionBuildResult, spec: ExtensionSpec) -> str:
-    name = spec.name or "Browser Forge Extension"
+    name = spec.name or "Layer Extension"
     targets = ", ".join(spec.target_urls) or "the active tab"
     download = _download_url(result.project_id)
 
@@ -170,6 +198,18 @@ async def stream_orchestrator_events(
     await _stage_pause()
     architect = await run_architect(ArchitectRequest(build=build))
     yield {"type": "tool_end", "name": "Agentverse Architect"}
+    yield _artifact_event(
+        "architect",
+        "Architect",
+        "Spec drafted",
+        architect.summary,
+        meta=[
+            {"label": "Extension", "value": architect.spec.name},
+            {"label": "Targets", "value": ", ".join(architect.spec.target_urls)},
+            {"label": "Files", "value": ", ".join(architect.spec.files_needed)},
+        ],
+        chips=architect.spec.verification_notes[:3],
+    )
     await _stage_pause(0.25)
     yield {"type": "content", "content": f"{architect.summary}\n"}
     await _stage_pause(0.45)
@@ -180,6 +220,17 @@ async def stream_orchestrator_events(
         RagRequest(job_id=build.job_id, spec=architect.spec, query=build.query)
     )
     yield {"type": "tool_end", "name": "Agentverse RAG"}
+    yield _artifact_event(
+        "rag",
+        "RAG",
+        "Context assembled",
+        rag.summary,
+        meta=[
+            {"label": "Patterns", "value": str(len(rag.snippets))},
+            {"label": "Source", "value": "curated + site bootstrap"},
+        ],
+        chips=rag.snippets[:3],
+    )
     await _stage_pause(0.25)
     yield {"type": "content", "content": f"{rag.summary}\n"}
     await _stage_pause(0.45)
@@ -190,6 +241,17 @@ async def stream_orchestrator_events(
         CodegenRequest(job_id=build.job_id, build=build, spec=architect.spec, rag=rag)
     )
     yield {"type": "tool_end", "name": "Agentverse Codegen"}
+    yield _artifact_event(
+        "codegen",
+        "Codegen",
+        "Files written",
+        codegen.summary,
+        meta=[
+            {"label": "Written", "value": f"{len(codegen.written_files)} files"},
+            {"label": "Project", "value": codegen.project_id},
+        ],
+        chips=codegen.written_files,
+    )
     await _stage_pause(0.25)
     yield {"type": "content", "content": f"{codegen.summary}\n"}
     await _stage_pause(0.45)
@@ -200,6 +262,18 @@ async def stream_orchestrator_events(
         ValidationRequest(job_id=build.job_id, project_id=build.project_id)
     )
     yield {"type": "tool_end", "name": "Agentverse Validator"}
+    yield _artifact_event(
+        "validator",
+        "Validator",
+        "Manifest checked",
+        validation.summary,
+        meta=[
+            {"label": "Status", "value": "passed" if validation.ok else "needs fixes"},
+            {"label": "Errors", "value": str(len(validation.errors))},
+            {"label": "Warnings", "value": str(len(validation.warnings))},
+        ],
+        chips=[item.get("message", "") for item in (validation.errors + validation.warnings)[:3]],
+    )
     await _stage_pause(0.25)
     yield {"type": "content", "content": f"{validation.summary}\n"}
     await _stage_pause(0.45)
@@ -210,6 +284,17 @@ async def stream_orchestrator_events(
         PackageRequest(job_id=build.job_id, project_id=build.project_id)
     )
     yield {"type": "tool_end", "name": "Agentverse Packager"}
+    yield _artifact_event(
+        "packager",
+        "Packager",
+        "Install package ready",
+        package.summary,
+        meta=[
+            {"label": "Folder", "value": os.path.basename(package.extension_path)},
+            {"label": "ZIP", "value": os.path.basename(package.zip_path) if package.zip_path else "not generated"},
+        ],
+        chips=["Load unpacked in Chrome", package.extension_path],
+    )
     await _stage_pause(0.25)
     yield {"type": "content", "content": f"{package.summary}\n"}
     yield {

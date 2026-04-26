@@ -24,6 +24,7 @@ def _manifest(
     target_urls: list[str],
     description: str,
     host_permissions: list[str] | None = None,
+    background_js: bool = False,
 ) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "manifest_version": 3,
@@ -39,6 +40,8 @@ def _manifest(
             }
         ],
     }
+    if background_js:
+        manifest["background"] = {"service_worker": "background.js"}
     if host_permissions:
         manifest["host_permissions"] = host_permissions
     return manifest
@@ -109,7 +112,7 @@ function scheduleApply() {{
     try {{
       applyRules();
     }} catch (err) {{
-      console.debug('Browser Forge applyRules failed', err);
+      console.debug('Layer applyRules failed', err);
     }}
   }});
 }}
@@ -258,16 +261,8 @@ async function classify(items) {{
     .map((item) => ({{ id: item.id, text: item.text }}));
   if (payload.length === 0) return;
   try {{
-    const res = await fetch(CLASSIFY_ENDPOINT, {{
-      method: 'POST',
-      headers: {{ 'Content-Type': 'application/json' }},
-      body: JSON.stringify({{
-        filter_description: FILTER_DESCRIPTION,
-        items: payload,
-      }}),
-    }});
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await classifyInBackground(payload);
+    if (!data?.ok) return;
     const matches = new Set(Array.isArray(data?.matches) ? data.matches.map(String) : []);
     for (const item of payload) {{
       cache.set(item.id, matches.has(item.id));
@@ -275,6 +270,30 @@ async function classify(items) {{
   }} catch {{
     // Keep items visible on classify failure.
   }}
+}}
+
+function classifyInBackground(items) {{
+  return new Promise((resolve) => {{
+    if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {{
+      resolve({{ ok: false, matches: [] }});
+      return;
+    }}
+    chrome.runtime.sendMessage(
+      {{
+        type: 'LAYER_CLASSIFY_ITEMS',
+        endpoint: CLASSIFY_ENDPOINT,
+        filter_description: FILTER_DESCRIPTION,
+        items,
+      }},
+      (response) => {{
+        if (chrome.runtime.lastError || !response?.ok) {{
+          resolve({{ ok: false, matches: [] }});
+          return;
+        }}
+        resolve(response);
+      }},
+    );
+  }});
 }}
 
 async function run() {{
@@ -305,21 +324,81 @@ window.addEventListener('hashchange', () => {{ void run(); }});
 """.strip()
 
 
-def _files(name: str, target_urls: list[str], description: str, content_js: str, content_css: str | None = None, host_permissions: list[str] | None = None) -> dict[str, str]:
+def _classification_background_script() -> str:
+    return f"""
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {{
+  if (!message || message.type !== 'LAYER_CLASSIFY_ITEMS') return false;
+
+  const endpoint =
+    typeof message.endpoint === 'string'
+      ? message.endpoint
+      : {json.dumps(LOCAL_CLASSIFY_ENDPOINT)};
+  const filterDescription =
+    typeof message.filter_description === 'string'
+      ? message.filter_description
+      : '';
+  const items = Array.isArray(message.items) ? message.items : [];
+
+  (async () => {{
+    try {{
+      const response = await fetch(endpoint, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          filter_description: filterDescription,
+          items,
+        }}),
+      }});
+      if (!response.ok) {{
+        sendResponse({{ ok: false, matches: [], error: `HTTP ${{response.status}}` }});
+        return;
+      }}
+      const data = await response.json();
+      sendResponse({{
+        ok: true,
+        matches: Array.isArray(data?.matches) ? data.matches.map(String) : [],
+      }});
+    }} catch (error) {{
+      sendResponse({{
+        ok: false,
+        matches: [],
+        error: error instanceof Error ? error.message : String(error),
+      }});
+    }}
+  }})();
+
+  return true;
+}});
+""".strip()
+
+
+def _files(
+    name: str,
+    target_urls: list[str],
+    description: str,
+    content_js: str,
+    content_css: str | None = None,
+    host_permissions: list[str] | None = None,
+    background_js: str | None = None,
+) -> dict[str, str]:
     css = content_css or _base_css()
-    return {
+    files = {
         "manifest.json": json.dumps(
             _manifest(
                 name=name,
                 target_urls=target_urls,
                 description=description,
                 host_permissions=host_permissions,
+                background_js=bool(background_js),
             ),
             indent=2,
         ),
         "content.js": content_js,
         "content.css": css,
     }
+    if background_js:
+        files["background.js"] = background_js
+    return files
 
 
 def _youtube_shorts(query: str, target_urls: list[str], name: str) -> dict[str, str]:
@@ -378,6 +457,7 @@ def _youtube_keyword_filter(query: str, target_urls: list[str], name: str) -> di
         "Filter YouTube videos by semantic criteria.",
         js,
         host_permissions=["http://localhost:8000/*"],
+        background_js=_classification_background_script(),
     )
 
 
@@ -511,6 +591,7 @@ def _email_deadlines(query: str, target_urls: list[str], name: str) -> dict[str,
         "Highlight deadline/action emails using semantic classification.",
         js,
         host_permissions=["http://localhost:8000/*"],
+        background_js=_classification_background_script(),
     )
 
 
@@ -652,7 +733,151 @@ def _linkedin_page_filter(query: str, target_urls: list[str], name: str) -> dict
         "Filter LinkedIn result/feed cards with semantic matching.",
         js,
         host_permissions=["http://localhost:8000/*"],
+        background_js=_classification_background_script(),
     )
+
+
+def _linkedin_hiring_highlight(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  document.querySelectorAll('.feed-shared-update-v2, div[data-id^="urn:li:activity"], article, .occludable-update').forEach((card) => {
+    if (!(card instanceof Element)) return;
+    const text = (card.textContent || '').toLowerCase().replace(/\\s+/g, ' ');
+    const matchesHiring = HIRING_TERMS.some((term) => text.includes(term));
+    card.classList.toggle('bf-linkedin-hiring-hit', matchesHiring);
+    if (matchesHiring) ensureHiringBadge(card);
+  });
+""",
+        """
+const HIRING_TERMS = [
+  'hiring',
+  'we are hiring',
+  "we're hiring",
+  'internship',
+  'internships',
+  'intern ',
+  ' intern,',
+  ' intern.',
+  'new grad',
+  'new graduate',
+  'graduate role',
+  'entry level',
+  'early career',
+  'campus recruiting',
+  'university recruiting',
+  'open role',
+  'open roles',
+  'job opening',
+  'job openings',
+  'job opportunity',
+  'career opportunity',
+  'apply now',
+  'applications are open',
+  'recruiting',
+  'recruiter',
+  'referral',
+  'software engineer intern',
+  'swe intern',
+  'summer intern',
+  'summer 2026',
+  'fall 2026',
+  'join our team',
+  'careers page',
+  'open position',
+  'open positions',
+];
+
+function ensureHiringBadge(card) {
+  if (card.querySelector('.bf-linkedin-hiring-badge')) return;
+  const badge = document.createElement('div');
+  badge.className = 'bf-linkedin-hiring-badge';
+  badge.textContent = 'HIRING';
+  card.prepend(badge);
+}
+""",
+    )
+    css = """
+.bf-linkedin-hiring-hit {
+  border: 5px solid #ff1f1f !important;
+  border-radius: 12px !important;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.9), 0 0 28px rgba(255, 0, 0, 0.75) !important;
+  outline: 2px solid rgba(255, 0, 0, 0.55) !important;
+  outline-offset: 4px !important;
+  position: relative !important;
+}
+
+.bf-linkedin-hiring-badge {
+  background: #e50914 !important;
+  border: 2px solid #fff !important;
+  border-radius: 999px !important;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35) !important;
+  color: #fff !important;
+  font: 900 13px/1 Arial, Helvetica, sans-serif !important;
+  letter-spacing: 0 !important;
+  padding: 8px 12px !important;
+  position: absolute !important;
+  right: 14px !important;
+  top: 12px !important;
+  z-index: 20 !important;
+}
+""".strip()
+    return _files(name, target_urls, "Highlight LinkedIn hiring and internship posts.", js, css)
+
+
+def _linkedin_real_talk(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  document.querySelectorAll(
+    '.feed-shared-update-v2__description-wrapper, .update-components-text, .feed-shared-text, .feed-shared-inline-show-more-text, div[data-id^="urn:li:activity"]'
+  ).forEach((node) => translateCorporateSpeak(node));
+""",
+        """
+const TRANSLATIONS = [
+  [/thrilled to announce/gi, '[bragging that]'],
+  [/excited to (?:announce|share)/gi, '[posting for validation that]'],
+  [/i(?:'|’)?m happy to share/gi, '[LinkedIn update:]'],
+  [/humbled to (?:announce|share|be)/gi, '[weirdly proud to be]'],
+  [/honou?red to (?:announce|share|be)/gi, '[name-dropping that I am]'],
+  [/after much reflection/gi, '[after PR review]'],
+  [/bittersweet/gi, '[trying to sound profound]'],
+  [/next chapter/gi, '[new job]'],
+  [/incredible journey/gi, '[job]'],
+  [/dynamic environment/gi, '[chaos]'],
+  [/cross-functional/gi, '[many meetings]'],
+  [/synergy/gi, '[meetings]'],
+  [/leveraging/gi, '[using]'],
+  [/move fast/gi, '[rush]'],
+  [/thought leader/gi, '[posting a lot]'],
+  [/passionate about/gi, '[paid to care about]'],
+];
+
+function translateCorporateSpeak(node) {
+  if (!(node instanceof Element)) return;
+  if (node.dataset.bfRealTalk === '1') return;
+  const original = node.innerHTML;
+  let next = original;
+  TRANSLATIONS.forEach(([pattern, replacement]) => {
+    next = next.replace(pattern, `<span class="bf-real-talk-translation" title="Corporate translator">${replacement}</span>`);
+  });
+  if (next !== original) {
+    node.innerHTML = next;
+    node.dataset.bfRealTalk = '1';
+  }
+}
+""",
+    )
+    css = """
+.bf-real-talk-translation {
+  background: #ffe45c !important;
+  border: 1px solid #b58900 !important;
+  border-radius: 4px !important;
+  color: #141414 !important;
+  display: inline !important;
+  font-weight: 800 !important;
+  padding: 1px 4px !important;
+}
+""".strip()
+    return _files(name, target_urls, "Translate LinkedIn corporate language into real talk.", js, css)
 
 
 def _x_for_you(query: str, target_urls: list[str], name: str) -> dict[str, str]:
@@ -687,6 +912,61 @@ def _x_trending(query: str, target_urls: list[str], name: str) -> dict[str, str]
 """,
     )
     return _files(name, target_urls, "Hide X/Twitter trending sidebar sections.", js)
+
+
+def _x_community_note_elevator(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  document.querySelectorAll('[data-testid="birdwatch-pivot"], [data-testid="birdwatch-pivot"] *, div[aria-label*="Community Note" i]').forEach((node) => {
+    if (!(node instanceof Element)) return;
+    const note = node.closest('[data-testid="birdwatch-pivot"]') || node;
+    elevateCommunityNote(note);
+  });
+""",
+        """
+function elevateCommunityNote(note) {
+  if (!(note instanceof Element)) return;
+  note.classList.add('bf-community-note-elevated');
+  if (note.querySelector('.bf-community-note-header')) return;
+  const header = document.createElement('div');
+  header.className = 'bf-community-note-header';
+  header.textContent = 'FACT CHECK';
+  note.prepend(header);
+}
+""",
+    )
+    css = """
+.bf-community-note-elevated {
+  background: #b00020 !important;
+  border: 3px solid #ffccd5 !important;
+  border-radius: 14px !important;
+  box-shadow: 0 0 0 3px rgba(176, 0, 32, 0.35), 0 18px 42px rgba(0, 0, 0, 0.28) !important;
+  color: #fff !important;
+  font-size: 1.08em !important;
+  font-weight: 700 !important;
+  margin: 12px 0 !important;
+  padding: 14px !important;
+  transform: scale(1.05) !important;
+  transform-origin: center top !important;
+  z-index: 5 !important;
+}
+
+.bf-community-note-elevated * {
+  color: #fff !important;
+}
+
+.bf-community-note-header {
+  background: #fff !important;
+  border-radius: 999px !important;
+  color: #b00020 !important;
+  display: inline-block !important;
+  font: 900 13px/1 Arial, Helvetica, sans-serif !important;
+  letter-spacing: 0 !important;
+  margin: 0 0 10px !important;
+  padding: 8px 12px !important;
+}
+""".strip()
+    return _files(name, target_urls, "Elevate X Community Notes into prominent fact-check banners.", js, css)
 
 
 def _x_engagement_bait(query: str, target_urls: list[str], name: str) -> dict[str, str]:
@@ -746,6 +1026,77 @@ function hasVerifiedBadge(article) {
 """,
     )
     return _files(name, target_urls, "Remove low-like verified X replies on tweet threads.", js)
+
+
+def _amazon_descammer(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  const products = Array.from(document.querySelectorAll('[data-asin]')).filter((product) => {
+    return product instanceof Element && (product.getAttribute('data-asin') || '').trim().length > 0;
+  });
+  let cheapest = null;
+  products.forEach((product) => {
+    product.classList.remove('bf-amazon-cheapest');
+    if (isSponsoredProduct(product)) {
+      hideNode(product);
+      return;
+    }
+    product.classList.remove(HIDDEN_CLASS);
+    const price = readPrice(product);
+    if (price === null) return;
+    if (!cheapest || price < cheapest.price) cheapest = { node: product, price };
+  });
+  if (cheapest?.node) cheapest.node.classList.add('bf-amazon-cheapest');
+""",
+        """
+function isSponsoredProduct(product) {
+  const text = (product.textContent || '').toLowerCase();
+  if (text.includes('sponsored')) return true;
+  return Boolean(product.querySelector('[aria-label*="Sponsored" i], [data-component-type*="sp-sponsored" i]'));
+}
+
+function readPrice(product) {
+  const whole = product.querySelector('.a-price .a-price-whole, .a-price-whole');
+  if (!whole) return null;
+  const fraction = product.querySelector('.a-price .a-price-fraction, .a-price-fraction');
+  const wholeText = (whole.textContent || '').replace(/[^0-9]/g, '');
+  const fractionText = (fraction?.textContent || '00').replace(/[^0-9]/g, '').padEnd(2, '0').slice(0, 2);
+  if (!wholeText) return null;
+  const price = Number(`${wholeText}.${fractionText}`);
+  return Number.isFinite(price) ? price : null;
+}
+""",
+    )
+    css = """
+.bf-hidden {
+  display: none !important;
+}
+
+.bf-amazon-cheapest {
+  border: 5px solid #00d084 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 0 32px rgba(0, 208, 132, 0.82) !important;
+  outline: 2px solid #00ff9c !important;
+  outline-offset: 4px !important;
+  position: relative !important;
+}
+
+.bf-amazon-cheapest::before {
+  background: #00d084 !important;
+  border-radius: 999px !important;
+  color: #002417 !important;
+  content: "CHEAPEST REAL RESULT" !important;
+  display: block !important;
+  font: 900 12px/1 Arial, Helvetica, sans-serif !important;
+  left: 12px !important;
+  letter-spacing: 0 !important;
+  padding: 8px 10px !important;
+  position: absolute !important;
+  top: 12px !important;
+  z-index: 30 !important;
+}
+""".strip()
+    return _files(name, target_urls, "Hide sponsored Amazon products and highlight the cheapest result.", js, css)
 
 
 def _netflix_roulette(query: str, target_urls: list[str], name: str) -> dict[str, str]:
@@ -1095,6 +1446,41 @@ body.bf-doomscroll-locked {
     return _files(name, target_urls, "Stop doomscrolling after ten centered videos.", js, css)
 
 
+def _youtube_clickbait_nuke(query: str, target_urls: list[str], name: str) -> dict[str, str]:
+    js = _runtime_wrapper(
+        """
+  document.documentElement.classList.add('bf-youtube-clickbait-nuke');
+  document.querySelectorAll('ytd-thumbnail').forEach((thumbnail) => {
+    thumbnail.classList.add('bf-youtube-clickbait-thumbnail');
+    thumbnail.querySelectorAll('#mouseover-overlay, ytd-moving-thumbnail-renderer, #hover-overlays').forEach((preview) => {
+      preview.classList.add('bf-youtube-preview-forced');
+    });
+  });
+""",
+    )
+    css = """
+html.bf-youtube-clickbait-nuke ytd-thumbnail img.yt-core-image,
+html.bf-youtube-clickbait-nuke ytd-thumbnail yt-image img,
+html.bf-youtube-clickbait-nuke ytd-thumbnail #img {
+  opacity: 0 !important;
+}
+
+html.bf-youtube-clickbait-nuke ytd-thumbnail #mouseover-overlay,
+html.bf-youtube-clickbait-nuke ytd-thumbnail ytd-moving-thumbnail-renderer,
+html.bf-youtube-clickbait-nuke ytd-thumbnail #hover-overlays,
+html.bf-youtube-clickbait-nuke ytd-thumbnail .bf-youtube-preview-forced {
+  display: block !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+html.bf-youtube-clickbait-nuke ytd-thumbnail {
+  background: #000 !important;
+}
+""".strip()
+    return _files(name, target_urls, "Replace YouTube clickbait thumbnails with preview frames.", js, css)
+
+
 def _youtube_absolute_focus(query: str, target_urls: list[str], name: str) -> dict[str, str]:
     js = _runtime_wrapper(
         """
@@ -1276,6 +1662,7 @@ BUILDERS: dict[str, Callable[[str, list[str], str], dict[str, str]]] = {
     "youtube-comments": _youtube_comments,
     "youtube-recommendations": _youtube_recommendations,
     "youtube-keyword-filter": _youtube_keyword_filter,
+    "youtube-clickbait-nuke": _youtube_clickbait_nuke,
     "instagram-nav": _instagram_nav,
     "instagram-suggested-posts": _instagram_suggested_posts,
     "instagram-floating-messages": _instagram_floating_messages,
@@ -1293,15 +1680,113 @@ BUILDERS: dict[str, Callable[[str, list[str], str], dict[str, str]]] = {
     "linkedin-feed": _linkedin_feed,
     "linkedin-promoted": _linkedin_promoted,
     "linkedin-page-filter": _linkedin_page_filter,
+    "linkedin-hiring-highlight": _linkedin_hiring_highlight,
+    "linkedin-real-talk": _linkedin_real_talk,
     "x-for-you": _x_for_you,
     "x-trending": _x_trending,
+    "x-community-note-elevator": _x_community_note_elevator,
     "x-engagement-bait": _x_engagement_bait,
+    "amazon-descammer": _amazon_descammer,
     "netflix-roulette": _netflix_roulette,
     "doomscroll-guillotine": _doomscroll_guillotine,
     "youtube-absolute-focus": _youtube_absolute_focus,
     "reddit-sidebar": _reddit_sidebar,
     "reddit-collapse-comments": _reddit_collapse_comments,
 }
+
+
+def _site_requested(query_lower: str, target_urls: list[str], aliases: tuple[str, ...]) -> bool:
+    haystack = f"{query_lower} {' '.join(target_urls)}".lower()
+    tokens = set(re.findall(r"[a-z0-9]+", haystack))
+    for alias in aliases:
+        alias_lower = alias.lower()
+        if "." in alias_lower:
+            if alias_lower in haystack:
+                return True
+            continue
+        if alias_lower in tokens:
+            return True
+    return False
+
+
+def _has_any_phrase(query_lower: str, phrases: tuple[str, ...]) -> bool:
+    normalized = re.sub(r"\s+", " ", query_lower)
+    return any(phrase in normalized for phrase in phrases)
+
+
+def build_hardcoded_demo_files(
+    query: str,
+    target_urls: list[str],
+    extension_name: str,
+) -> tuple[dict[str, str], str] | None:
+    """Return the hackathon-grade offline demo payload for known trigger phrases.
+
+    This direct layer intentionally runs before RAG scoring and the LLM. The
+    broader deterministic builder below remains available for teammate-added
+    architecture and classification use-cases.
+    """
+    query_lower = query.lower()
+    is_linkedin = _site_requested(query_lower, target_urls, ("linkedin", "linkedin.com"))
+    is_x = _site_requested(query_lower, target_urls, ("x", "x.com", "twitter", "twitter.com"))
+    is_amazon = _site_requested(query_lower, target_urls, ("amazon", "amazon.com"))
+    is_netflix = _site_requested(query_lower, target_urls, ("netflix", "netflix.com"))
+    is_youtube = _site_requested(query_lower, target_urls, ("youtube", "youtube.com", "youtu.be"))
+    is_instagram = _site_requested(query_lower, target_urls, ("instagram", "instagram.com"))
+    is_tiktok = _site_requested(query_lower, target_urls, ("tiktok", "tiktok.com"))
+
+    if is_linkedin and _has_any_phrase(
+        query_lower,
+        ("translate", "real talk", "bullshit", "corporate translator", "corporate speak"),
+    ):
+        return _linkedin_real_talk(query, target_urls, extension_name), "linkedin-real-talk"
+
+    if is_linkedin and _has_any_phrase(
+        query_lower,
+        (
+            "hiring",
+            "internship",
+            "intern",
+            "new grad",
+            "new graduate",
+            "entry level",
+            "open role",
+            "job opening",
+            "recruiting",
+        ),
+    ):
+        return _linkedin_hiring_highlight(query, target_urls, extension_name), "linkedin-hiring-highlight"
+
+    if is_x and _has_any_phrase(query_lower, ("community note", "community notes", "fact check", "birdwatch")):
+        return _x_community_note_elevator(query, target_urls, extension_name), "x-community-note-elevator"
+
+    if is_x and _has_any_phrase(
+        query_lower,
+        ("verified", "blue check", "bluecheck", "spam", "engagement bait", "bot replies", "reply bait"),
+    ):
+        return _x_engagement_bait(query, target_urls, extension_name), "x-engagement-bait"
+
+    if is_amazon and _has_any_phrase(
+        query_lower,
+        ("sponsored", "cheapest", "amazon", "de-scam", "descam", "scammer", "ads"),
+    ):
+        return _amazon_descammer(query, target_urls, extension_name), "amazon-descammer"
+
+    if is_netflix and _has_any_phrase(query_lower, ("random", "roulette", "random episode", "tv roulette", "episode")):
+        return _netflix_roulette(query, target_urls, extension_name), "netflix-roulette"
+
+    if (is_instagram or is_tiktok) and _has_any_phrase(
+        query_lower,
+        ("doomscroll", "10 videos", "ten videos", "go outside", "guillotine"),
+    ):
+        return _doomscroll_guillotine(query, target_urls, extension_name), "doomscroll-guillotine"
+
+    if is_youtube and _has_any_phrase(query_lower, ("clickbait", "thumbnail", "thumbnails", "anti-clickbait")):
+        return _youtube_clickbait_nuke(query, target_urls, extension_name), "youtube-clickbait-nuke"
+
+    if is_youtube and _has_any_phrase(query_lower, ("absolute focus", "distractions", "focus", "comments")):
+        return _youtube_absolute_focus(query, target_urls, extension_name), "youtube-absolute-focus"
+
+    return None
 
 
 def build_deterministic_files(

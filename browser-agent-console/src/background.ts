@@ -63,7 +63,7 @@ function respondNoTab(sendResponse: (response: { ok: boolean } | { elements: Cli
 }
 
 function sendSidepanelState(tabId: number, isOpen: boolean) {
-  chrome.tabs.sendMessage(tabId, {
+  void chrome.tabs.sendMessage(tabId, {
     type: isOpen ? MESSAGE_TYPES.sidepanelOpen : MESSAGE_TYPES.sidepanelClose,
   }).catch(() => {})
 }
@@ -164,10 +164,10 @@ async function broadcastClearDomEdits() {
 
 async function broadcastClickedElementsUpdated(elements: ClickedElementStored[]) {
   try {
-    chrome.runtime.sendMessage({
+    void chrome.runtime.sendMessage({
       type: MESSAGE_TYPES.clickedElementsUpdated,
       elements,
-    })
+    }).catch(() => {})
   } catch {
     // Ignore runtime listeners that are unavailable
   }
@@ -188,7 +188,7 @@ async function broadcastClickedElementsUpdated(elements: ClickedElementStored[])
 const sidepanelStateByTab = new Map<number, boolean>()
 let isSidepanelOpen = false
 let isDomEditMode = false
-const INITIAL_RELOAD_KEY = 'browserForgeSidepanelInitialReloadDone'
+const INITIAL_RELOAD_KEY = 'layerSidepanelInitialReloadDone'
 
 const consoleLogsByTab = new Map<number, ConsoleLogEntry[]>()
 const MAX_CONSOLE_LOGS_PER_TAB = 500
@@ -321,7 +321,7 @@ sidePanelApi.onStateChanged?.addListener((state: SidePanelState) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id ?? message?.tabId
 
-  // Re-pin Browser Forge as a side panel from the floating overlay.
+  // Re-pin Layer as a side panel from the floating overlay.
   if (message?.type === 'bf:open-sidepanel') {
     chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
       if (tab?.windowId !== undefined) {

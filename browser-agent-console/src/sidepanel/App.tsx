@@ -115,6 +115,15 @@ type MessagePart =
   | { type: 'tool'; name: string; label: string; status: 'running' | 'done'; favIconUrl?: string }
   | { type: 'extension_ready'; path: string; projectId?: string }
 
+type AgentArtifact = {
+  stage: string
+  agent: string
+  title: string
+  summary: string
+  meta?: { label: string; value: string }[]
+  chips?: string[]
+}
+
 type DisplayPart =
   | { type: 'text'; content: string }
   | { type: 'chip'; items: ClickedElementStored[]; rawHtml?: string; label?: string; host?: string }
@@ -127,6 +136,7 @@ interface Message {
   displayParts?: DisplayPart[]
   startedAt?: number
   thinkingMs?: number
+  agentArtifacts?: AgentArtifact[]
 }
 
 type AppMode = 'create' | 'dom'
@@ -151,6 +161,18 @@ type SyncImportResult = DomExportResult & {
   share_id: string
   share_url: string
   name: string
+}
+
+function LayerLogo({ className = '', size = 18 }: { className?: string; size?: number }) {
+  return (
+    <img
+      src="/public/layer-logo.svg"
+      alt=""
+      className={`layer-logo ${className}`}
+      width={size}
+      height={size}
+    />
+  )
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -392,35 +414,237 @@ function ExtensionInstallCard({ path, projectId }: { path: string; projectId?: s
 // moment after streaming finishes (user can re-expand).
 type ToolPart = { type: 'tool'; name: string; label: string; status: 'running' | 'done'; favIconUrl?: string }
 
+const AGENT_STAGES = [
+  {
+    id: 'architect',
+    name: 'Agentverse Architect',
+    agent: 'Architect',
+    label: 'Plan',
+    detail: 'Build spec',
+  },
+  {
+    id: 'rag',
+    name: 'Agentverse RAG',
+    agent: 'RAG',
+    label: 'Search',
+    detail: 'Relevant patterns',
+  },
+  {
+    id: 'codegen',
+    name: 'Agentverse Codegen',
+    agent: 'Codegen',
+    label: 'Write',
+    detail: 'Extension files',
+  },
+  {
+    id: 'validator',
+    name: 'Agentverse Validator',
+    agent: 'Validator',
+    label: 'Check',
+    detail: 'Manifest V3',
+  },
+  {
+    id: 'packager',
+    name: 'Agentverse Packager',
+    agent: 'Packager',
+    label: 'Pack',
+    detail: 'Installable build',
+  },
+] as const
+
+type AgentStageStatus = 'idle' | 'running' | 'done'
+
+const AGENT_STAGE_NAMES = new Set<string>(AGENT_STAGES.map((stage) => stage.name))
+
+function hasAgentRunTools(toolParts: ToolPart[]) {
+  return toolParts.some((part) => AGENT_STAGE_NAMES.has(part.name))
+}
+
+function getAgentStageStatus(stageName: string, toolParts: ToolPart[]): AgentStageStatus {
+  const matching = toolParts.filter((part) => part.name === stageName)
+  if (matching.some((part) => part.status === 'running')) return 'running'
+  if (matching.some((part) => part.status === 'done')) return 'done'
+  return 'idle'
+}
+
+function AgentRunVisualizer({
+  toolParts,
+  isStreaming,
+  artifacts,
+}: {
+  toolParts: ToolPart[]
+  isStreaming: boolean
+  artifacts: AgentArtifact[]
+}) {
+  const stages = AGENT_STAGES.map((stage) => ({
+    ...stage,
+    status: getAgentStageStatus(stage.name, toolParts),
+  }))
+  const artifactsByStage = new Map(artifacts.map((artifact) => [artifact.stage, artifact]))
+  const activeStage = stages.find((stage) => stage.status === 'running')
+  const completedCount = stages.filter((stage) => stage.status === 'done').length
+  const displayProgress = activeStage ? completedCount + 0.45 : completedCount
+  const progressWidth = `${Math.min(100, Math.round((displayProgress / AGENT_STAGES.length) * 100))}%`
+  const statusLabel = activeStage
+    ? `${activeStage.label} · ${activeStage.agent}`
+    : completedCount === AGENT_STAGES.length
+      ? 'Ready'
+      : 'Queued'
+  const latestDoneStage = [...stages].reverse().find((stage) => stage.status === 'done')
+  const focusStage = activeStage ?? latestDoneStage ?? stages[0]
+  const focusArtifact = artifactsByStage.get(focusStage.id) ?? artifacts[artifacts.length - 1]
+  const focusTitle = focusArtifact?.title ?? focusStage.detail
+  const focusSummary = focusArtifact?.summary ?? (
+    activeStage
+      ? `${activeStage.agent} is producing ${activeStage.detail.toLowerCase()}.`
+      : completedCount === AGENT_STAGES.length
+        ? 'The build has been assembled, checked, and packaged for Chrome.'
+        : 'The orchestrator is preparing the first agent handoff.'
+  )
+  const inspectorLabel = activeStage
+    ? 'Live handoff'
+    : completedCount === AGENT_STAGES.length
+      ? 'Final artifact'
+      : 'Waiting'
+  const inspectorMeta = focusArtifact?.meta?.slice(0, 2) ?? []
+  const inspectorChips = focusArtifact?.chips?.slice(0, 3) ?? []
+
+  return (
+    <div className={`agent-run-visualizer ${isStreaming ? 'streaming' : 'settled'}`}>
+      <div className="agent-viz-header">
+        <span className="agent-viz-kicker">
+          <LayerLogo size={16} />
+          Agent build
+        </span>
+        <span className="agent-viz-progress">{statusLabel}</span>
+      </div>
+      <div className={`agent-viz-canvas active-${focusStage.id}`} aria-label="Layer agent build visualization">
+        <div className="agent-run-progress" aria-hidden="true">
+          <span className="agent-run-progress-fill" style={{ width: progressWidth }} />
+        </div>
+
+        <div className="agent-map">
+          <div className="agent-map-beams" aria-hidden="true">
+            {stages.map((stage) => (
+              <span key={`${stage.id}-beam`} className={`agent-map-beam ${stage.id} ${stage.status}`} />
+            ))}
+          </div>
+
+          <span className="agent-data-packet" aria-hidden="true">
+            <span />
+          </span>
+
+          <div className="agent-core">
+            <span className="agent-core-rings" aria-hidden="true" />
+            <span className="agent-core-logo">
+              <LayerLogo size={34} />
+            </span>
+            <span className="agent-core-label">{activeStage ? 'assembling' : 'layered build'}</span>
+          </div>
+
+          <div className="agent-layer-stack" aria-hidden="true">
+            {stages.map((stage) => (
+              <span key={`${stage.id}-plate`} className={`agent-stack-plate ${stage.status}`} />
+            ))}
+          </div>
+
+          {stages.map((stage, index) => (
+            <div key={stage.id} className={`agent-map-node ${stage.id} ${stage.status}`}>
+              <span className="agent-node-dot">{stage.status === 'done' ? '✓' : index + 1}</span>
+              <span className="agent-node-copy">
+                <span>{stage.agent}</span>
+                <small>{stage.label}</small>
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="agent-inspector">
+          <div className="agent-inspector-header">
+            <span className="agent-inspector-kicker">{inspectorLabel}</span>
+            <strong>{focusTitle}</strong>
+          </div>
+          <p>{focusSummary}</p>
+          {(inspectorMeta.length > 0 || inspectorChips.length > 0) && (
+            <div className="agent-inspector-meta">
+              {inspectorMeta.map((item) => (
+                <span key={`${focusStage.id}-${item.label}`}>
+                  <small>{item.label}</small>
+                  <strong>{item.value}</strong>
+                </span>
+              ))}
+              {inspectorChips.map((chip) => (
+                <span key={`${focusStage.id}-${chip}`}>
+                  <small>Artifact</small>
+                  <strong>{chip}</strong>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="agent-artifact-strip" aria-label="Agent artifact receipts">
+          {stages.map((stage) => {
+            const artifact = artifactsByStage.get(stage.id)
+            return (
+              <article key={`${stage.id}-token`} className={`agent-artifact-token ${stage.status}`}>
+                <span className="agent-artifact-token-status" />
+                <div>
+                  <span>{stage.label}</span>
+                  <strong>{artifact?.title ?? stage.detail}</strong>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      </div>
+      <div className="agent-viz-footer">
+        <span className="agent-viz-live-dot" />
+        <span>{completedCount}/{AGENT_STAGES.length} complete</span>
+      </div>
+    </div>
+  )
+}
+
 function ThinkingBlock({
   toolParts,
   isStreaming,
   durationMs,
+  artifacts,
 }: {
   toolParts: ToolPart[]
   isStreaming: boolean
   durationMs?: number
+  artifacts?: AgentArtifact[]
 }) {
   const [open, setOpen] = useState(true)
   const wasStreaming = useRef(isStreaming)
+  const hasAgentRun = hasAgentRunTools(toolParts)
   useEffect(() => {
     if (wasStreaming.current && !isStreaming) {
-      const t = window.setTimeout(() => setOpen(false), 1400)
+      const collapseDelay = hasAgentRun ? 4200 : 1400
+      const t = window.setTimeout(() => setOpen(false), collapseDelay)
       wasStreaming.current = isStreaming
       return () => window.clearTimeout(t)
     }
     wasStreaming.current = isStreaming
-  }, [isStreaming])
+  }, [hasAgentRun, isStreaming])
 
   const seconds = durationMs != null ? Math.max(1, Math.round(durationMs / 1000)) : null
-  const headerLabel = isStreaming
-    ? 'Thinking…'
-    : seconds != null
-      ? `Thought for ${seconds} second${seconds === 1 ? '' : 's'}`
-      : 'Thought'
+  const headerLabel = hasAgentRun
+    ? isStreaming
+      ? 'Building...'
+      : seconds != null
+        ? `Built in ${seconds}s`
+        : 'Build run'
+    : isStreaming
+      ? 'Thinking...'
+      : seconds != null
+        ? `Thought for ${seconds} second${seconds === 1 ? '' : 's'}`
+        : 'Thought'
 
   return (
-    <div className={`thinking-block ${open ? 'open' : 'collapsed'} ${isStreaming ? 'streaming' : ''}`}>
+    <div className={`thinking-block ${open ? 'open' : 'collapsed'} ${isStreaming ? 'streaming' : ''} ${hasAgentRun ? 'has-agent-viz' : ''}`}>
       <button
         type="button"
         className="thinking-block-header"
@@ -443,7 +667,10 @@ function ThinkingBlock({
         </svg>
       </button>
       <div className="thinking-block-body">
-        {toolParts.map((part, idx) => (
+        {hasAgentRun && (
+          <AgentRunVisualizer toolParts={toolParts} isStreaming={isStreaming} artifacts={artifacts ?? []} />
+        )}
+        {!hasAgentRun && toolParts.map((part, idx) => (
           <div key={idx} className={`tool-call ${part.status} bf-part-in`}>
             <span className="tool-call-icon">
               {part.status === 'running' ? (
@@ -467,7 +694,7 @@ function ThinkingBlock({
   )
 }
 
-// Function injected into the active web page to render Browser Forge as a
+// Function injected into the active web page to render Layer as a
 // draggable floating overlay (Dia-style: no browser chrome, sits above page).
 // Must be self-contained — runs in page context via chrome.scripting.executeScript.
 function injectFloatingOverlay(iframeUrl: string) {
@@ -484,7 +711,8 @@ function injectFloatingOverlay(iframeUrl: string) {
     top: '80px',
     right: '40px',
     width: '400px',
-    height: 'min(720px, calc(100vh - 120px))',
+    height: '560px',
+    maxHeight: 'calc(100vh - 24px)',
     zIndex: '2147483647',
     boxShadow: '0 16px 60px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.3)',
     borderRadius: '18px',
@@ -570,7 +798,21 @@ function injectFloatingOverlay(iframeUrl: string) {
     | { dir: ResizeDir; startW: number; startH: number; mouseX: number; mouseY: number }
     | null = null
   const MIN_W = 320
-  const MIN_H = 420
+  const MIN_H = 360
+  let userResized = false
+
+  const fitHeightToContent = (height: number) => {
+    if (!Number.isFinite(height) || userResized) return
+    const maxH = Math.max(MIN_H, window.innerHeight - 24)
+    const nextH = Math.min(maxH, Math.max(MIN_H, Math.ceil(height)))
+    host.style.height = `${nextH}px`
+
+    const rect = host.getBoundingClientRect()
+    if (rect.bottom > window.innerHeight - 8) {
+      host.style.top = `${Math.max(8, window.innerHeight - nextH - 8)}px`
+      host.style.bottom = 'auto'
+    }
+  }
 
   const startDrag = (clientX: number, clientY: number) => {
     const rect = host.getBoundingClientRect()
@@ -580,6 +822,7 @@ function injectFloatingOverlay(iframeUrl: string) {
 
   const startResize = (dir: ResizeDir, e: MouseEvent) => {
     const rect = host.getBoundingClientRect()
+    userResized = true
     // Lock the host to absolute left/top so width/height adjustments don't
     // fight with the initial right-anchored placement.
     host.style.left = `${rect.left}px`
@@ -655,6 +898,9 @@ function injectFloatingOverlay(iframeUrl: string) {
     const msg = event.data
     if (!msg || typeof msg !== 'object') return
     if (msg.type === 'bf:close-floating') close()
+    if (msg.type === 'bf:resize-floating') {
+      fitHeightToContent(Number(msg.height))
+    }
     if (msg.type === 'bf:drag-start') {
       // Coords are relative to the iframe; convert to viewport.
       const rect = iframe.getBoundingClientRect()
@@ -689,8 +935,7 @@ export default function App() {
   } | null>(null)
 
   // Rules state
-  const [rules, setRules] = useState<Rule[]>([])
-  const [rulesOpen, setRulesOpen] = useState(false)
+  const [, setRules] = useState<Rule[]>([])
 
   const [appMode, setAppMode] = useState<AppMode>('create')
   const [domEdits, setDomEdits] = useState<DomEditOperation[]>([])
@@ -766,6 +1011,32 @@ export default function App() {
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
   }, [panelMenuOpen])
+
+  useEffect(() => {
+    if (panelMode !== 'floating') return
+    let raf = 0
+    const sendSize = () => {
+      window.cancelAnimationFrame(raf)
+      raf = window.requestAnimationFrame(() => {
+        const appEl = document.querySelector('.app') as HTMLElement | null
+        const height = appEl
+          ? Math.max(appEl.scrollHeight, Math.ceil(appEl.getBoundingClientRect().height))
+          : document.documentElement.scrollHeight
+        window.parent.postMessage({ type: 'bf:resize-floating', height }, '*')
+      })
+    }
+    const resizeObserver = new ResizeObserver(sendSize)
+    const appEl = document.querySelector('.app') as HTMLElement | null
+    if (appEl) resizeObserver.observe(appEl)
+    resizeObserver.observe(document.body)
+    sendSize()
+    window.addEventListener('load', sendSize)
+    return () => {
+      window.cancelAnimationFrame(raf)
+      resizeObserver.disconnect()
+      window.removeEventListener('load', sendSize)
+    }
+  }, [panelMode])
 
   const fadeOutAndClose = (after?: () => void) => {
     document.body.classList.add('bf-fading-out')
@@ -2299,7 +2570,7 @@ export default function App() {
       const res = await fetch(`${API_URL}/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Browser Forge' }),
+        body: JSON.stringify({ name: 'Layer' }),
       })
       if (res.ok) {
         const project: Project = await res.json()
@@ -2317,7 +2588,6 @@ export default function App() {
     setActiveConversationId(null)
     setMessages([])
     setError('')
-    setRulesOpen(false)
     fetchConversations(project.id)
     fetchRules(project.id)
   }
@@ -2342,17 +2612,6 @@ export default function App() {
       if (res.ok) {
         const data: Rule[] = await res.json()
         setRules(data)
-      }
-    } catch {
-      // Silently fail
-    }
-  }
-
-  const handleDeleteRule = async (ruleId: string) => {
-    try {
-      const res = await fetch(`${API_URL}/rules/${ruleId}`, { method: 'DELETE' })
-      if (res.ok) {
-        setRules((prev) => prev.filter((r) => r.id !== ruleId))
       }
     } catch {
       // Silently fail
@@ -2684,6 +2943,7 @@ export default function App() {
     let accumulated = ''
     let assistantAdded = false
     const parts: MessagePart[] = []
+    const agentArtifacts: AgentArtifact[] = []
     const requestStartedAt = Date.now()
 
     const ensureAssistantMessage = () => {
@@ -2697,6 +2957,7 @@ export default function App() {
             content: accumulated,
             created_at: new Date().toISOString(),
             parts: parts.map((p) => ({ ...p })),
+            agentArtifacts: agentArtifacts.map((artifact) => ({ ...artifact })),
             startedAt: requestStartedAt,
           },
         ])
@@ -2707,6 +2968,7 @@ export default function App() {
       const snap = {
         content: accumulated,
         parts: parts.map((p) => ({ ...p })),
+        agentArtifacts: agentArtifacts.map((artifact) => ({ ...artifact })),
       }
       setMessages((prev) => {
         const updated = [...prev]
@@ -2756,9 +3018,29 @@ export default function App() {
         return
       }
 
+      // Structured output from one Agentverse role
+      if (data.type === 'agent_artifact') {
+        const artifact = data.artifact as AgentArtifact | undefined
+        if (artifact?.stage && artifact.agent && artifact.title) {
+          const existingIndex = agentArtifacts.findIndex((item) => item.stage === artifact.stage)
+          if (existingIndex >= 0) {
+            agentArtifacts[existingIndex] = artifact
+          } else {
+            agentArtifacts.push(artifact)
+          }
+          ensureAssistantMessage()
+          updateAssistantMessage()
+        }
+        return
+      }
+
       // Extension ready for install
       if (data.type === 'extension_ready') {
-        parts.push({ type: 'extension_ready', path: data.path, projectId: data.project_id })
+        parts.push({
+          type: 'extension_ready',
+          path: data.path,
+          projectId: typeof data.project_id === 'string' ? data.project_id : undefined,
+        })
         ensureAssistantMessage()
         updateAssistantMessage()
         return
@@ -2813,6 +3095,7 @@ export default function App() {
               content: finalContent,
               created_at: new Date().toISOString(),
               parts: parts.map((p) => ({ ...p })),
+              agentArtifacts: agentArtifacts.map((artifact) => ({ ...artifact })),
               startedAt: requestStartedAt,
               thinkingMs: elapsedMs,
             },
@@ -2826,6 +3109,7 @@ export default function App() {
                 ...last,
                 content: finalContent,
                 parts: parts.map((p) => ({ ...p })),
+                agentArtifacts: agentArtifacts.map((artifact) => ({ ...artifact })),
                 thinkingMs: elapsedMs,
               }
             }
@@ -3039,7 +3323,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: activeProject?.name ? `${activeProject.name} DOM edits` : 'Browser Forge DOM edits',
+          name: activeProject?.name ? `${activeProject.name} DOM edits` : 'Layer DOM edits',
           target_urls: targetUrlPatternsForDomEdits(),
           operations: domEdits,
         }),
@@ -3111,7 +3395,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app app-${panelMode}`}>
       {/* Sidebar overlay */}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
 
@@ -3173,9 +3457,9 @@ export default function App() {
               <path d="m17 3 4 4-9.5 9.5L7 17l.5-4.5L17 3z" />
             </svg>
           </button>
-          <h1>Browser Forge</h1>
+          <h1><LayerLogo className="header-logo" size={18} />Layer</h1>
           <div className="header-actions">
-            <div className="app-mode-toggle" role="tablist" aria-label="Browser Forge mode">
+            <div className="app-mode-toggle" role="tablist" aria-label="Layer mode">
               <button
                 type="button"
                 role="tab"
@@ -3196,25 +3480,12 @@ export default function App() {
               </button>
             </div>
             {activeProject && (
-              <>
-                <button
-                  className={`icon-btn ${rulesOpen ? 'active' : ''}`}
-                  onClick={() => setRulesOpen(!rulesOpen)}
-                  title="Agent memory"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-                    <path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z" />
-                    <line x1="10" y1="22" x2="14" y2="22" />
-                  </svg>
-                  {rules.length > 0 && <span className="rules-badge">{rules.length}</span>}
-                </button>
-                <button className="icon-btn" onClick={startNewConversation} title="New chat">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                </button>
-              </>
+              <button className="icon-btn" onClick={startNewConversation} title="New chat">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
             )}
             <button
               className={`icon-btn ${syncOpen ? 'active' : ''}`}
@@ -3291,39 +3562,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Rules panel */}
-        {rulesOpen && (
-          <div className="rules-panel">
-            <div className="rules-panel-header">
-              <span className="rules-panel-title">Agent Memory</span>
-              <span className="rules-panel-count">{rules.length} rule{rules.length !== 1 ? 's' : ''}</span>
-            </div>
-            {rules.length === 0 ? (
-              <div className="rules-empty">
-                No rules yet. The agent will learn your preferences as you chat.
-              </div>
-            ) : (
-              <div className="rules-list">
-                {rules.map((rule) => (
-                  <div key={rule.id} className="rules-item">
-                    <span className="rules-item-content">{rule.content}</span>
-                    <button
-                      className="rules-item-delete"
-                      onClick={() => handleDeleteRule(rule.id)}
-                      title="Delete rule"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         {syncOpen && (
           <form className="sync-panel" onSubmit={handleSyncImport}>
             <div className="sync-copy">
@@ -3384,7 +3622,7 @@ export default function App() {
         )}
 
         {/* Messages */}
-        <div className="messages-container">
+        <div className={`messages-container ${messages.length === 0 && !loading && !thinking ? 'is-empty' : ''}`}>
           {appMode === 'dom' && messages.length === 0 && !loading && (
             <div className="empty-canvas">
               <div className="preview-card preview-card-floating dom-preview-card">
@@ -3420,13 +3658,14 @@ export default function App() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                   </svg>
-                  <span>Browser Forge</span>
+                  <LayerLogo size={14} />
+                  <span>Layer</span>
                 </div>
                 <div className="preview-card-quote">
                   "Hide YouTube Shorts so I can focus."
                 </div>
               </div>
-              <div className="empty-canvas-title">Starting Browser Forge</div>
+              <div className="empty-canvas-title">Starting Layer</div>
               <div className="empty-canvas-hint">Preparing your chat workspace…</div>
             </div>
           )}
@@ -3437,7 +3676,8 @@ export default function App() {
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                   </svg>
-                  <span>Browser Forge</span>
+                  <LayerLogo size={14} />
+                  <span>Layer</span>
                 </div>
                 <div className="preview-card-quote">
                   "Hide YouTube Shorts so I can focus."
@@ -3491,7 +3731,11 @@ export default function App() {
             const toolPartsList = (msg.parts ?? []).filter(
               (p): p is ToolPart => p.type === 'tool',
             )
+            const hasAgentRun = hasAgentRunTools(toolPartsList)
             const nonToolParts = (msg.parts ?? []).filter((p) => p.type !== 'tool')
+            const visibleNonToolParts = hasAgentRun
+              ? nonToolParts.filter((p) => p.type === 'extension_ready')
+              : nonToolParts
             return (
               <div key={i} className={`message ${msg.role} bf-msg-in`}>
                 {msg.role === 'assistant' && msg.parts && msg.parts.length > 0 ? (
@@ -3501,9 +3745,10 @@ export default function App() {
                         toolParts={toolPartsList}
                         isStreaming={isStreamingThis}
                         durationMs={msg.thinkingMs}
+                        artifacts={msg.agentArtifacts}
                       />
                     )}
-                    {nonToolParts.map((part, j) =>
+                    {visibleNonToolParts.map((part, j) =>
                       part.type === 'extension_ready' ? (
                         <ExtensionInstallCard key={j} path={part.path} projectId={part.projectId} />
                       ) : (
@@ -3757,18 +4002,6 @@ export default function App() {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <line x1="12" y1="5" x2="12" y2="19" />
                   <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                className="input-action-btn"
-                title="More"
-                onMouseDown={(e) => e.preventDefault()}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="1" />
-                  <circle cx="19" cy="12" r="1" />
-                  <circle cx="5" cy="12" r="1" />
                 </svg>
               </button>
               <div className="input-row-spacer" />

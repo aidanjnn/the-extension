@@ -4,7 +4,7 @@ import { setHoverHighlighterEnabled, startHoverHighlighter } from './highlighter
 import { MESSAGE_TYPES } from '../shared/messages'
 import App from './views/App.tsx'
 
-console.log('[Browser Forge] content script loaded')
+console.log('[Layer] content script loaded')
 
 const CONSOLE_LEVELS = ['log', 'info', 'warn', 'error', 'debug'] as const
 type ConsoleLevel = (typeof CONSOLE_LEVELS)[number]
@@ -57,9 +57,9 @@ const sendConsoleLog = (level: ConsoleLevel, args: unknown[]) => {
 }
 
 const hookConsole = () => {
-  const win = window as unknown as { __browserForgeConsoleHooked?: boolean }
-  if (win.__browserForgeConsoleHooked) return
-  win.__browserForgeConsoleHooked = true
+  const win = window as unknown as { __layerConsoleHooked?: boolean }
+  if (win.__layerConsoleHooked) return
+  win.__layerConsoleHooked = true
 
   CONSOLE_LEVELS.forEach((level) => {
     const consoleRef = console as unknown as Record<string, (...args: unknown[]) => void>
