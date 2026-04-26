@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from agentverse_app.config import settings
 from agentverse_app.messages import RagRequest, RagResult
+from agentverse_app.nudges import retrieve_context, site_bootstrap_for_urls
 
 
 CURATED_PATTERNS = [
@@ -16,6 +17,8 @@ CURATED_PATTERNS = [
 
 async def run_rag(request: RagRequest) -> RagResult:
     snippets = list(CURATED_PATTERNS)
+    snippets.extend(retrieve_context(request.query, request.spec.target_urls))
+    snippets.extend(site_bootstrap_for_urls(request.spec.target_urls))
     if settings.enable_graph_rag:
         snippets.append(
             "Graph RAG is enabled, but the first Agentverse implementation keeps curated context as the stable fallback."

@@ -208,8 +208,18 @@ function getElementSelector(el: Element): string | null {
 function scheduleSave() {
   window.clearTimeout(saveTimer)
   saveTimer = window.setTimeout(() => {
-    chrome.storage.local.set({ [STORAGE_KEY]: state })
+    if (!chrome?.runtime?.id) return
+    void chrome.storage.local.set({ [STORAGE_KEY]: state }).catch(() => {})
   }, SAVE_DEBOUNCE_MS)
+}
+
+async function safeRuntimeMessage<T = unknown>(message: unknown): Promise<T | null> {
+  if (!chrome?.runtime?.id) return null
+  try {
+    return (await chrome.runtime.sendMessage(message)) as T
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -226,7 +236,7 @@ async function toggleClickedElement(el: Element) {
     timestamp: Date.now(),
   }
 
-  const response = await chrome.runtime.sendMessage({
+  const response = await safeRuntimeMessage<{ action?: string }>({
     type: MESSAGE_TYPES.toggleClicked,
     payload,
   })
@@ -248,7 +258,7 @@ async function toggleClickedElement(el: Element) {
  * Restores persistent clicked highlights for the current URL/tab.
  */
 async function restoreClickedHighlights() {
-  const response = await chrome.runtime.sendMessage({
+  const response = await safeRuntimeMessage<{ elements?: ClickedElementStored[] }>({
     type: MESSAGE_TYPES.getClicked,
     url: window.location.href,
   })
@@ -287,25 +297,21 @@ function hideClickedHighlights() {
 async function clearAllClickedHighlights() {
   hideClickedHighlights()
 
-  await chrome.runtime.sendMessage({
+  await safeRuntimeMessage({
     type: MESSAGE_TYPES.clearAllClicked,
   })
 }
 
 async function syncSidepanelState() {
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: MESSAGE_TYPES.getSidepanelState,
-    })
-    if (response?.known === true) {
-      setSidepanelState(Boolean(response?.isOpen))
-      sidepanelStateKnown = true
-      return
-    }
-    sidepanelStateKnown = false
-  } catch {
-    // Ignore errors to keep highlighter functional
+  const response = await safeRuntimeMessage<{ known?: boolean; isOpen?: boolean }>({
+    type: MESSAGE_TYPES.getSidepanelState,
+  })
+  if (response?.known === true) {
+    setSidepanelState(Boolean(response?.isOpen))
+    sidepanelStateKnown = true
+    return
   }
+  sidepanelStateKnown = false
 }
 
 

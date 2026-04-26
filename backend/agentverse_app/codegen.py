@@ -2,16 +2,50 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from typing import Any
 
 from agentverse_app import backend_client
+from agentverse_app.deterministic_codegen import build_deterministic_files
 from agentverse_app.messages import CodegenRequest, CodegenResult
+from agentverse_app.nudges import retrieve_context_entries
 from utils.config import get_provider_config, get_secondary_client
 
 logger = logging.getLogger(__name__)
+CODEGEN_LLM_TIMEOUT_SECONDS = 35
+CODEGEN_MAX_ATTEMPTS = 2
+
+
+USE_CASE_RULES: dict[str, dict[str, Any]] = {
+    "youtube-shorts": {"required_any": ["/shorts", "ytd-reel-shelf-renderer", "ytd-guide-entry-renderer"], "min_signals": 2, "behavior": "hide", "require_mutation_observer": True},
+    "youtube-comments": {"required_any": ["ytd-comments", "#comments"], "min_signals": 1, "behavior": "hide"},
+    "youtube-recommendations": {"required_any": ["#secondary", "ytd-watch-next-secondary-results-renderer", "ytd-compact-video-renderer"], "min_signals": 1, "behavior": "hide"},
+    "youtube-keyword-filter": {"required_any": ["ytd-rich-item-renderer", "ytd-video-renderer", "/api/classify"], "min_signals": 2, "behavior": "classify"},
+    "instagram-nav": {"required_any": ["/reels", "/explore", "/direct", "role=\"listitem\"", "role=listitem"], "min_signals": 2, "behavior": "hide"},
+    "instagram-suggested-posts": {"required_any": ["suggested", "article", "role=\"main\"", "role='main'"], "min_signals": 2, "behavior": "hide"},
+    "instagram-floating-messages": {"required_any": ["position: fixed", "getboundingclientrect", "direct", "messages"], "min_signals": 2, "behavior": "hide"},
+    "instagram-engagement-counts": {"required_any": ["likes", "comments", "aria-label"], "min_signals": 1, "behavior": "hide"},
+    "gmail-tabs": {"required_any": ["role=tab", "role=\"tab\"", "promotions", "social"], "min_signals": 2, "behavior": "hide"},
+    "gmail-sender-highlight": {"required_any": ["sender", "role=row", "unread", "tr"], "min_signals": 2, "behavior": "highlight"},
+    "gmail-focus": {"required_any": ["side panel", "advertisement", "aria-label*=\"meet\"", "aria-label*=\"chat\""], "min_signals": 1, "behavior": "hide"},
+    "email-deadlines": {"required_any": ["/api/classify", "deadline", "action"], "min_signals": 1, "behavior": "classify"},
+    "outlook-panels": {"required_any": ["complementary", "advertisement", "premium", "upgrade"], "min_signals": 1, "behavior": "hide"},
+    "outlook-highlight-sender": {"required_any": ["sender", "role=row", "highlight"], "min_signals": 2, "behavior": "highlight"},
+    "calendar-meeting-prep": {"required_any": ["createelement", "appendchild", "data-", "meeting"], "min_signals": 2, "behavior": "inject"},
+    "google-calendar-keywords": {"required_any": ["calendar", "aria-label", "event", "classlist.add"], "min_signals": 2, "behavior": "highlight"},
+    "google-calendar-weekends": {"required_any": ["saturday", "sunday", "weekend", "aria-label"], "min_signals": 1, "behavior": "hide"},
+    "calendar-missing-location": {"required_any": ["location", "link", "warning", "createelement"], "min_signals": 2, "behavior": "inject"},
+    "linkedin-feed": {"required_any": ["/feed", "scaffold-finite-scroll", "feed-shared-update-v2"], "min_signals": 1, "behavior": "hide"},
+    "linkedin-promoted": {"required_any": ["promoted", "sponsored", "ad", "feed-shared-update-v2"], "min_signals": 1, "behavior": "hide"},
+    "linkedin-page-filter": {"required_any": ["/api/classify", "company", "page"], "min_signals": 1, "behavior": "classify"},
+    "x-for-you": {"required_any": ["for you", "following", "data-testid"], "min_signals": 2, "behavior": "hide"},
+    "x-trending": {"required_any": ["trending", "what's happening", "right", "complementary"], "min_signals": 1, "behavior": "hide"},
+    "reddit-sidebar": {"required_any": ["aside", "complementary", "shreddit", "reddit-sidebar", "data-testid", "getboundingclientrect"], "min_signals": 3, "behavior": "hide"},
+    "reddit-collapse-comments": {"required_any": ["comment", "collapse", "aria-expanded", "reply"], "min_signals": 1, "behavior": "collapse"},
+}
 
 
 CODEGEN_SYSTEM_PROMPT = """\
@@ -22,6 +56,10 @@ You will receive a user request describing a browser customization. Your job is 
 output a complete Chrome extension as JSON with exactly three files: manifest.json, \
 content.js, and content.css. content.js and content.css must both contain meaningful \
 implementation code; never leave either one empty.
+
+You may also receive retrieved implementation context. Treat it as DOM guidance, \
+safety constraints, and selector starting points. Adapt it to the exact user \
+request, target URLs, and page evidence.
 
 Critical rules:
 1. Use SITE-SPECIFIC selectors, not generic ones. Research the site's actual DOM \
@@ -123,6 +161,7 @@ async def _generate_with_llm(
     target_urls: list[str],
     extension_name: str,
     provider: str,
+    rag_snippets: list[str],
     quality_feedback: list[str] | None = None,
 ) -> dict[str, str] | None:
     """Call the LLM to produce manifest/content.js/content.css. Returns None on failure."""
@@ -131,11 +170,16 @@ async def _generate_with_llm(
         provider
     )["secondary_model"]
 
+    retrieved_context = "\n".join(f"- {snippet}" for snippet in rag_snippets)
     user_prompt = (
         f"User request: {_strip_chip_html(query)}\n\n"
         f"Target URLs (use these as manifest content_scripts.matches): "
         f"{json.dumps(target_urls)}\n"
         f"Extension display name: {extension_name}\n\n"
+        "If the request is bespoke (not a single off-the-shelf pattern), still apply "
+        "the site overviews and DOM notes below, and invent selectors that match the "
+        "user’s specific goal for that page structure.\n\n"
+        f"Retrieved implementation context:\n{retrieved_context}\n\n"
         + (
             "The previous output failed these checks. Fix every issue:\n"
             + "\n".join(f"- {issue}" for issue in quality_feedback)
@@ -147,14 +191,20 @@ async def _generate_with_llm(
     )
 
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": CODEGEN_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
+        response = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": CODEGEN_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+            ),
+            timeout=CODEGEN_LLM_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        logger.warning("Codegen LLM call timed out after %ss", CODEGEN_LLM_TIMEOUT_SECONDS)
+        return None
     except Exception as exc:
         logger.warning("Codegen LLM call failed: %s", exc)
         return None
@@ -192,6 +242,10 @@ async def _generate_with_llm(
 
     has_css = bool(content_css.strip())
     _sanitize_manifest(manifest, has_css=has_css)
+    for script in manifest.get("content_scripts") or []:
+        if isinstance(script, dict):
+            # Structural DOM modification extensions are more reliable at document_idle.
+            script["run_at"] = "document_idle"
 
     files = {
         "manifest.json": json.dumps(manifest, indent=2),
@@ -240,7 +294,13 @@ def _sanitize_manifest(manifest: dict[str, Any], *, has_css: bool) -> None:
         ]
 
 
-def _quality_issues(files: dict[str, str], target_urls: list[str]) -> list[str]:
+def _quality_issues(
+    files: dict[str, str],
+    target_urls: list[str],
+    query: str,
+    rag_snippets: list[str],
+    focus_use_case_id: str | None = None,
+) -> list[str]:
     issues: list[str] = []
     manifest_raw = files.get("manifest.json", "")
     content_js = files.get("content.js", "")
@@ -269,6 +329,7 @@ def _quality_issues(files: dict[str, str], target_urls: list[str]) -> list[str]:
         issues.append("manifest content script must reference content.js.")
     if content_css.strip() and "content.css" not in (first_script.get("css") or []):
         issues.append("manifest content script must reference content.css when CSS is generated.")
+    run_at = str(first_script.get("run_at", "document_idle")).lower()
 
     combined = f"{content_js}\n{content_css}".lower()
     if re.search(r"\[class\*=['\"][^'\"]+['\"]\s+i?\]", combined):
@@ -281,8 +342,169 @@ def _quality_issues(files: dict[str, str], target_urls: list[str]) -> list[str]:
         issues.append("Do not combine broad textContent matching with generic ancestor hiding.")
     if "closest('section, article" in combined or 'closest("section, article' in combined:
         issues.append("Avoid generic closest('section, article...') ancestors; use site-specific containers.")
+    if run_at == "document_start" and "observe(document.body" in combined:
+        issues.append("Avoid observing document.body at document_start without a body-ready guard; use document_idle or wait for body.")
+    if run_at == "document_start" and "queryselectorall(" in combined and "domcontentloaded" not in combined:
+        issues.append("document_start scripts that query the DOM must wait for DOMContentLoaded or body availability.")
+
+    retrieved_tokens = [
+        token.strip()
+        for snippet in rag_snippets
+        for token in re.findall(r"`([^`]+)`", snippet)
+        if len(token.strip()) > 2
+    ]
+    selector_like_tokens = [
+        token.lower()
+        for token in retrieved_tokens
+        if any(ch in token for ch in ("/", "[", "]", "=", "-", ":", "."))
+    ][:10]
+    query_lower = query.lower()
+    query_tokens = set(re.findall(r"[a-z0-9]+", query_lower))
+    explicit_element_query = any(
+        marker in query_lower
+        for marker in ("clicked", "selected element", "orange", "chip", "selector")
+    )
+    if (
+        explicit_element_query
+        and selector_like_tokens
+        and not any(token in combined for token in selector_like_tokens)
+    ):
+        issues.append(
+            "Generated code does not reflect retrieved site implementation context; include at least some of the provided selectors/attributes."
+        )
+
+    matched_entries = retrieve_context_entries(query, target_urls, limit=8)
+    for entry in matched_entries:
+        entry_id = str(entry.get("id", ""))
+        if focus_use_case_id and entry_id != focus_use_case_id:
+            continue
+        terms = [str(term).lower() for term in entry.get("terms", [])]
+        if terms and not any(
+            (term in query_lower) or (term in query_tokens)
+            for term in terms
+        ):
+            # Skip cross-case entries that only matched because the site is similar.
+            continue
+        rule = USE_CASE_RULES.get(entry_id)
+        if not rule:
+            continue
+        required_any = [str(s).lower() for s in rule.get("required_any", [])]
+        min_signals = int(rule.get("min_signals", 1))
+        found = sum(1 for signal in required_any if signal in combined)
+        if required_any and found < min_signals:
+            issues.append(
+                f"Use-case '{entry.get('title')}' is under-specified; expected >= {min_signals} matching DOM signals."
+            )
+
+        behavior = str(rule.get("behavior", "")).lower()
+        if behavior == "hide" and not _has_hide_behavior(combined):
+            issues.append(f"Use-case '{entry.get('title')}' should visibly hide/remove target UI.")
+        if behavior == "highlight" and not _has_highlight_behavior(combined):
+            issues.append(f"Use-case '{entry.get('title')}' should add a visible highlight style/class.")
+        if behavior == "inject" and not _has_inject_behavior(combined):
+            issues.append(f"Use-case '{entry.get('title')}' should inject a small DOM marker/banner.")
+        if behavior == "collapse" and not _has_collapse_behavior(combined):
+            issues.append(f"Use-case '{entry.get('title')}' should collapse/expand comment bodies safely.")
+        if behavior == "classify" and "/api/classify" not in combined:
+            issues.append(f"Use-case '{entry.get('title')}' should use /api/classify for semantic matching.")
+        if rule.get("require_mutation_observer") and "mutationobserver" not in combined:
+            issues.append(f"Use-case '{entry.get('title')}' must include MutationObserver for SPA rerenders.")
+
+    targets_lower = " ".join(target_urls).lower()
+    if "youtube" in query_lower or "youtube" in targets_lower:
+        if "shorts" in query_lower:
+            if "/shorts" not in combined:
+                issues.append("YouTube Shorts behavior must key off `/shorts` URLs or attributes.")
+            yt_signals = (
+                "ytd-reel-shelf-renderer",
+                "ytd-guide-entry-renderer",
+                "ytd-mini-guide-entry-renderer",
+                "ytd-rich-item-renderer",
+                "ytd-video-renderer",
+            )
+            if not any(signal in combined for signal in yt_signals):
+                issues.append("YouTube Shorts removal must target YouTube-specific containers, not generic nodes.")
+            if "mutationobserver" not in combined:
+                issues.append("YouTube Shorts removal must watch SPA rerenders with a MutationObserver.")
+    if "reddit" in query_lower or "reddit" in targets_lower:
+        if any(term in query_lower for term in ("recent", "sidebar", "right")):
+            required_signals = (
+                "aside",
+                "complementary",
+                "shreddit",
+                "reddit-sidebar",
+                "getboundingclientrect",
+                "right",
+                "aria-label",
+                "data-testid",
+            )
+            signal_count = sum(1 for signal in required_signals if signal in combined)
+            if signal_count < 4:
+                issues.append(
+                    "Reddit right-rail widgets need multiple DOM/layout signals: include aside/complementary/custom-element selectors plus right-side or bounding-box checks."
+                )
+            if 'div[data-testid="sidebar-widget"]' in combined and signal_count < 5:
+                issues.append(
+                    "Do not rely primarily on div[data-testid='sidebar-widget']; add modern Reddit custom elements, ARIA/text, and right-rail fallbacks."
+                )
+            if "recent" not in combined:
+                issues.append("Recent-posts requests must explicitly look for recent/recent posts labels or attributes.")
 
     return issues
+
+
+def _has_hide_behavior(text: str) -> bool:
+    return any(
+        signal in text
+        for signal in (
+            "display: none",
+            "display:none",
+            "visibility: hidden",
+            ".remove(",
+            "bf-hidden",
+            "classlist.add(",
+        )
+    )
+
+
+def _has_highlight_behavior(text: str) -> bool:
+    return any(
+        signal in text
+        for signal in (
+            "highlight",
+            "background",
+            "outline",
+            "box-shadow",
+            "border",
+            "classlist.add(",
+        )
+    )
+
+
+def _has_inject_behavior(text: str) -> bool:
+    return any(
+        signal in text
+        for signal in (
+            "createelement(",
+            "appendchild(",
+            "insertbefore(",
+            "prepend(",
+            "dataset.",
+        )
+    )
+
+
+def _has_collapse_behavior(text: str) -> bool:
+    return any(
+        signal in text
+        for signal in (
+            "collapse",
+            "aria-expanded",
+            ".click(",
+            "toggle",
+            "hidden",
+        )
+    )
 
 
 async def _generate_checked(
@@ -290,21 +512,25 @@ async def _generate_checked(
     target_urls: list[str],
     extension_name: str,
     provider: str,
+    rag_snippets: list[str],
 ) -> dict[str, str] | None:
     feedback: list[str] | None = None
-    for attempt in range(3):
+    for attempt in range(CODEGEN_MAX_ATTEMPTS):
         files = await _generate_with_llm(
             query=query,
             target_urls=target_urls,
             extension_name=extension_name,
             provider=provider,
+            rag_snippets=rag_snippets,
             quality_feedback=feedback,
         )
         if files is None:
-            feedback = ["The response was missing valid manifest/content_js/content_css JSON."]
+            feedback = [
+                "The response was missing valid manifest/content_js/content_css JSON or timed out. Return valid JSON quickly."
+            ]
             continue
 
-        issues = _quality_issues(files, target_urls)
+        issues = _quality_issues(files, target_urls, query, rag_snippets)
         if not issues:
             return files
 
@@ -316,35 +542,50 @@ async def _generate_checked(
 
 async def run_codegen(request: CodegenRequest) -> CodegenResult:
     spec = request.spec
-    files = await _generate_checked(
+    source = "llm"
+    deterministic = build_deterministic_files(
         query=spec.behavior,
         target_urls=spec.target_urls,
         extension_name=spec.name,
-        provider=request.build.provider,
     )
+    if deterministic:
+        files, use_case_id = deterministic
+        deterministic_issues = _quality_issues(
+            files,
+            spec.target_urls,
+            spec.behavior,
+            request.rag.snippets,
+            focus_use_case_id=use_case_id,
+        )
+        if deterministic_issues:
+            logger.warning(
+                "Deterministic template %s failed quality checks: %s",
+                use_case_id,
+                deterministic_issues,
+            )
+            files = await _generate_checked(
+                query=spec.behavior,
+                target_urls=spec.target_urls,
+                extension_name=spec.name,
+                provider=request.build.provider,
+                rag_snippets=request.rag.snippets,
+            )
+        else:
+            source = f"deterministic:{use_case_id}"
+    else:
+        files = await _generate_checked(
+            query=spec.behavior,
+            target_urls=spec.target_urls,
+            extension_name=spec.name,
+            provider=request.build.provider,
+            rag_snippets=request.rag.snippets,
+        )
 
     if files is None:
-        manifest = {
-            "manifest_version": 3,
-            "name": spec.name[:45],
-            "version": "1.0",
-            "description": _strip_chip_html(spec.description)[:120],
-            "content_scripts": [
-                {
-                    "matches": spec.target_urls,
-                    "js": ["content.js"],
-                    "run_at": "document_idle",
-                }
-            ],
-        }
-        files = {
-            "manifest.json": json.dumps(manifest, indent=2),
-            "content.js": (
-                "// Codegen LLM unavailable — placeholder no-op.\n"
-                "// Edit this file or retry the build to generate real logic.\n"
-                "console.log('Browser Forge: codegen fallback active');\n"
-            ),
-        }
+        raise RuntimeError(
+            "Code generation failed (LLM unavailable, timed out, or quota exhausted). "
+            "No extension was produced. Retry shortly or switch provider/API quota."
+        )
 
     response = await backend_client.write_files(spec.project_id, files)
     written = response.get("written_files", list(files))
@@ -353,5 +594,5 @@ async def run_codegen(request: CodegenRequest) -> CodegenResult:
         project_id=spec.project_id,
         files=files,
         written_files=written,
-        summary=f"Wrote {len(written)} extension file(s): {', '.join(written)}.",
+        summary=f"Wrote {len(written)} extension file(s): {', '.join(written)}. Source={source}.",
     )

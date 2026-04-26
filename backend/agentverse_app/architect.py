@@ -29,8 +29,30 @@ def _infer_target_urls(query: str, active_tabs: list[dict]) -> list[str]:
         return ["https://x.com/*", "https://twitter.com/*"]
     if "gmail" in lowered:
         return ["https://mail.google.com/*"]
+    if "outlook" in lowered:
+        return [
+            "https://outlook.live.com/*",
+            "https://outlook.office.com/*",
+            "https://outlook.office365.com/*",
+        ]
+    if "google calendar" in lowered or "calendar.google" in lowered:
+        return ["https://calendar.google.com/*"]
+    if "calendar" in lowered:
+        return [
+            "https://calendar.google.com/*",
+            "https://outlook.live.com/*",
+            "https://outlook.office.com/*",
+        ]
+    if "linkedin" in lowered:
+        return ["https://www.linkedin.com/*", "https://linkedin.com/*"]
+    if "reddit" in lowered:
+        return ["https://www.reddit.com/*", "https://reddit.com/*"]
 
-    for tab in active_tabs:
+    # If the query does not name a site, prefer the user's currently active tab.
+    active_first = [tab for tab in active_tabs if tab.get("active")]
+    fallback_tabs = active_first + [tab for tab in active_tabs if tab not in active_first]
+
+    for tab in fallback_tabs:
         url = tab.get("url", "")
         match = re.match(r"https?://([^/]+)/?", url)
         if match:
