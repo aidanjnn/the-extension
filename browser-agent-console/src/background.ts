@@ -250,6 +250,17 @@ sidePanelApi.onStateChanged?.addListener((state: SidePanelState) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id ?? message?.tabId
 
+  // Re-pin Browser Forge as a side panel from the floating overlay.
+  if (message?.type === 'bf:open-sidepanel') {
+    chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
+      if (tab?.windowId !== undefined) {
+        chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {})
+      }
+      sendResponse({ ok: true })
+    })
+    return true
+  }
+
   const type = message?.type as MessageType | undefined
 
   if (type === MESSAGE_TYPES.getClicked) {

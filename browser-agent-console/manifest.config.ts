@@ -34,4 +34,13 @@ export default defineManifest({
   side_panel: {
     default_path: 'src/sidepanel/index.html',
   },
+  // Required so the side-panel UI can be loaded inside an iframe injected
+  // into web pages (the Dia-style "Floating" overlay). Without this Chrome
+  // shows "This page has been blocked by Chrome" for the iframe.
+  web_accessible_resources: [
+    {
+      resources: ['src/sidepanel/index.html', 'assets/*', 'public/*'],
+      matches: ['<all_urls>'],
+    },
+  ],
 })
