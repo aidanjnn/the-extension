@@ -1,0 +1,255 @@
+{
+  "title": "the extension — architecture",
+  "width": 1500,
+  "height": 770,
+  "seed": 3,
+  "groups": [
+    {
+      "x": 20,
+      "y": 70,
+      "w": 600,
+      "h": 140,
+      "label": "Chrome extension (browser-agent-console)",
+      "color": "blue"
+    },
+    {
+      "x": 20,
+      "y": 240,
+      "w": 1460,
+      "h": 150,
+      "label": "Backend (backend/, Python)",
+      "color": "yellow"
+    },
+    {
+      "x": 20,
+      "y": 440,
+      "w": 1460,
+      "h": 150,
+      "label": "Agent roles (agentverse_app/)",
+      "color": "cyan"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "content",
+      "x": 50,
+      "y": 105,
+      "w": 250,
+      "h": 90,
+      "label": "Content script",
+      "sub": "Cmd-hover overlay\nlive DOM ops",
+      "color": "blue"
+    },
+    {
+      "id": "panel",
+      "x": 340,
+      "y": 105,
+      "w": 250,
+      "h": 90,
+      "label": "Side panel",
+      "sub": "React · Create / Edit DOM",
+      "color": "blue"
+    },
+    {
+      "id": "ws",
+      "x": 680,
+      "y": 95,
+      "w": 280,
+      "h": 105,
+      "label": "generated_extensions/",
+      "sub": "extension folder + ZIP",
+      "shape": "cylinder",
+      "color": "green"
+    },
+    {
+      "id": "asi",
+      "x": 1180,
+      "y": 105,
+      "w": 270,
+      "h": 90,
+      "label": "ASI:One / Agentverse",
+      "sub": "Agent Chat Protocol",
+      "color": "orange"
+    },
+    {
+      "id": "db",
+      "x": 50,
+      "y": 275,
+      "w": 250,
+      "h": 105,
+      "label": "SQLite",
+      "sub": "projects · chats · rules",
+      "shape": "cylinder",
+      "color": "green"
+    },
+    {
+      "id": "api",
+      "x": 340,
+      "y": 275,
+      "w": 250,
+      "h": 100,
+      "label": "FastAPI :8000",
+      "sub": "REST · /ws · /api/classify\n/internal/agentverse/*",
+      "color": "yellow"
+    },
+    {
+      "id": "orch",
+      "x": 760,
+      "y": 280,
+      "w": 260,
+      "h": 90,
+      "label": "Orchestrator",
+      "sub": "build pipeline",
+      "color": "cyan"
+    },
+    {
+      "id": "bureau",
+      "x": 1180,
+      "y": 280,
+      "w": 270,
+      "h": 90,
+      "label": "uAgents Bureau :8001",
+      "sub": "/submit endpoint",
+      "color": "yellow"
+    },
+    {
+      "id": "arch",
+      "x": 50,
+      "y": 480,
+      "w": 230,
+      "h": 80,
+      "label": "Architect",
+      "sub": "spec + target URLs",
+      "color": "cyan"
+    },
+    {
+      "id": "rag",
+      "x": 340,
+      "y": 480,
+      "w": 230,
+      "h": 80,
+      "label": "RAG",
+      "sub": "curated patterns",
+      "color": "cyan"
+    },
+    {
+      "id": "codegen",
+      "x": 630,
+      "y": 480,
+      "w": 230,
+      "h": 80,
+      "label": "Codegen",
+      "sub": "templates or LLM",
+      "color": "cyan"
+    },
+    {
+      "id": "val",
+      "x": 920,
+      "y": 480,
+      "w": 230,
+      "h": 80,
+      "label": "Validator",
+      "sub": "MV3 checks",
+      "color": "cyan"
+    },
+    {
+      "id": "pkg",
+      "x": 1210,
+      "y": 480,
+      "w": 230,
+      "h": 80,
+      "label": "Packager",
+      "sub": "ZIP + load info",
+      "color": "cyan"
+    },
+    {
+      "id": "llm",
+      "x": 610,
+      "y": 650,
+      "w": 270,
+      "h": 90,
+      "label": "LLM provider",
+      "sub": "Gemini · OpenAI · NVIDIA",
+      "shape": "ellipse",
+      "color": "violet"
+    }
+  ],
+  "edges": [
+    {
+      "from": "panel",
+      "to": "content",
+      "label": "messages",
+      "both": true
+    },
+    {
+      "from": "panel",
+      "to": "api",
+      "label": "WS + REST",
+      "lx": 50
+    },
+    {
+      "from": "api",
+      "to": "db"
+    },
+    {
+      "from": "api",
+      "to": "ws",
+      "label": "write / zip",
+      "lx": 40,
+      "ly": 10
+    },
+    {
+      "from": "api",
+      "to": "orch",
+      "label": "in-process",
+      "ly": -14
+    },
+    {
+      "from": "asi",
+      "to": "bureau",
+      "label": "chat",
+      "lx": 30
+    },
+    {
+      "from": "bureau",
+      "to": "orch",
+      "ly": -14
+    },
+    {
+      "from": "orch",
+      "to": "arch",
+      "label": "runs",
+      "ly": -12
+    },
+    {
+      "from": "arch",
+      "to": "rag"
+    },
+    {
+      "from": "rag",
+      "to": "codegen"
+    },
+    {
+      "from": "codegen",
+      "to": "val"
+    },
+    {
+      "from": "val",
+      "to": "pkg"
+    },
+    {
+      "from": "codegen",
+      "to": "llm",
+      "dashed": true
+    }
+  ],
+  "notes": [
+    {
+      "x": 930,
+      "y": 680,
+      "text": "Codegen, Validator and Packager write files,\nvalidate and zip through FastAPI's\n/internal/agentverse/* execution API",
+      "anchor": "start",
+      "size": 16
+    }
+  ]
+}
